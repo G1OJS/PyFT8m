@@ -5,8 +5,8 @@ HPS, BPT = 4, 2
 SYM_RATE, SAMP_RATE = 6.25, 12000
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
 MIN_SCORE = 100
-MAX_LDPC = 35
-H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-2, 3.5]]
+MAX_LDPC = 18
+H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-2.5, 3.5]]
 
 call_hashes = {}
 def add_call_hash(call):
@@ -261,6 +261,7 @@ class Receiver:
         self.output_type = output_type
         self.candidates = []
         self.duplicate_filter = []
+        self.last_decode = 0
         self.n_not_completed = 0
         self.cycle_searched = False
         self.sock_out = None
@@ -295,7 +296,7 @@ class Receiver:
                 self.send_output_type({'mtype':'rollover', 'info':info})
                 self.candidates = self.search(cycle_start_str)
                 self.duplicate_filter = []
-                print(self.n_not_completed) # to tidy up and also add in 'time to spare' measure
+                print(f"Last decode {self.last_decode % 15}, {self.n_not_completed} not attempted")
             else:
                 self.decode()
             t_cyc_prev = t_cyc
@@ -345,12 +346,15 @@ class Receiver:
                 c['decode_result'], hcode = decode_ldpc(p)
             c['attempt'] += 1
 
-            if c['decode_result'] and not c['decode_result'] in self.duplicate_filter:
-                their_snr = np.clip(int(np.max(p) - np.min(p)) - 58, -24, 24)
-                self.duplicate_filter.append(c['decode_result'])
-                self.send_output_type({'mtype':'decode', 'cyclestart_string': c['cs'], 't_decode':time.time(),
-                                  'fHz':f"{c['fHz']:7.2f}", 'dt':f"{c['dt']:+04.2f}", 'hcode':hcode,
-                                  'their_snr':f"{their_snr:+03d}", 'msg_tuple':c['decode_result']})
+            if c['decode_result']:
+                self.last_decode = time.time()
+                if not c['decode_result'] in self.duplicate_filter:
+                    their_snr = np.clip(int(np.max(p) - np.min(p)) - 58, -24, 24)
+                    self.duplicate_filter.append(c['decode_result'])
+                    self.send_output_type({'mtype':'decode', 'cyclestart_string': c['cs'], 't_decode':time.time(),
+                                      'fHz':f"{c['fHz']:7.2f}", 'dt':f"{c['dt']:+04.2f}", 'hcode':hcode,
+                                      'their_snr':f"{their_snr:+03d}", 'msg_tuple':c['decode_result']})
+            
 
 if __name__ == "__main__":
     rx = Receiver(mic_keywords = ['Mic', 'CODEC'], max_freq = 2900, output_type = 'print')
