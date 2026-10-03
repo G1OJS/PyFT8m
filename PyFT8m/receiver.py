@@ -4,9 +4,9 @@ import time, pyaudio, threading, queue, socket, json
 HPS, BPT = 4, 2
 SYM_RATE, SAMP_RATE = 6.25, 12000
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
-MIN_SCORE = 150
-MAX_LDPC = 25
-H0_RANGE = [0, int(3.6 * SYM_RATE * HPS)]
+MIN_SCORE = 100
+MAX_LDPC = 35
+H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-2, 3.5]]
 
 call_hashes = {}
 def add_call_hash(call):
@@ -167,8 +167,11 @@ def decode_raw91(p):
 CVidx_all = np.array([[4,31,59,91,92,96,153],[8,25,63,83,93,96,148],[5,34,65,78,98,107,154],[11,37,67,87,101,139,158],[8,40,70,82,104,114,145],[14,41,71,88,102,123,156],[17,37,74,81,109,131,154],[45,55,64,111,130,161,173],[18,36,76,89,113,114,143],[21,45,78,83,117,121,151],[19,35,59,73,110,125,161],[7,49,58,90,100,105,168],[25,53,69,90,101,130,156],[20,46,65,80,120,140,170],[1,4,52,57,86,136,152],[26,51,56,91,122,137,168],[2,27,41,61,62,115,133],[28,48,70,85,105,129,158],[12,43,66,89,97,135,159],[10,44,82,91,111,144,149],[30,50,60,86,137,142,162],[10,53,66,84,112,128,165],[28,29,84,88,117,143,150],[15,58,60,74,111,150,163],[5,32,60,93,115,146,0],[6,24,61,94,122,151,0],[7,33,62,95,96,143,0],[6,32,64,97,126,138,0],[9,35,66,99,139,146,0],[10,36,67,100,107,126,0],[12,38,68,102,105,155,0],[13,39,69,103,149,162,0],[15,42,59,106,123,159,0],[1,33,72,106,107,157,0],[16,43,73,108,141,160,0],[11,44,75,110,121,166,0],[8,46,71,112,119,166,0],[19,38,77,104,116,163,0],[20,47,70,92,138,165,0],[2,48,74,113,128,160,0],[22,47,58,118,127,164,0],[16,39,62,112,134,158,0],[23,43,79,120,131,145,0],[20,36,63,94,136,161,0],[14,31,79,98,132,164,0],[3,44,80,124,127,169,0],[19,46,81,117,135,167,0],[12,50,61,118,119,144,0],[13,51,64,114,118,157,0],[24,52,76,129,148,149,0],[21,54,77,100,140,171,0],[35,82,133,142,171,174,0],[14,30,83,113,125,170,0],[4,29,68,120,134,173,0],[52,84,110,115,145,168,0],[7,50,81,99,132,173,0],[23,55,67,95,172,174,0],[26,41,77,109,141,148,0],[27,40,56,124,125,126,0],[18,49,55,124,141,167,0],[6,33,85,108,116,156,0],[9,54,63,131,147,155,0],[22,53,68,109,121,174,0],[3,13,48,78,95,123,0],[31,69,133,150,155,169,0],[5,39,75,102,136,167,0],[2,54,86,101,135,164,0],[15,56,87,108,119,171,0],[23,34,71,94,127,153,0],[11,49,88,92,142,157,0],[29,34,87,97,147,162,0],[22,57,85,93,140,159,0],[28,32,72,103,132,166,0],[1,26,45,80,128,147,0],[17,27,89,103,116,153,0],[51,57,98,163,165,172,0],[21,37,73,138,152,169,0],[16,47,76,130,137,154,0],[3,24,30,72,104,139,0],[9,40,90,106,134,151,0],[18,42,79,144,146,152,0],[25,38,65,99,122,160,0],[17,42,75,129,170,172,0]], dtype = np.int16)
 llr175 = np.zeros(175, dtype=np.float32)
 mC2V_prev = np.zeros(CVidx_all.shape, dtype=np.float32)
+import warnings
+warnings.filterwarnings("error")
 def decode_ldpc(p):
     global llr175, mC2V_prev
+    alpha_atanh_approx = 1.18
     llra = np.max(p[:, [4,5,6,7]], axis=1) - np.max(p[:, [0,1,2,3]], axis=1)
     llrb = np.max(p[:, [2,3,4,7]], axis=1) - np.max(p[:, [0,1,5,6]], axis=1)
     llrc = np.max(p[:, [1,2,6,7]], axis=1) - np.max(p[:, [0,3,4,5]], axis=1)
@@ -177,16 +180,17 @@ def decode_ldpc(p):
     llr = 3.5 * llr / (np.std(llr) + 0.01)
     llr = np.clip(llr, -3.7, 3.7)
     llr175[1:] = llr
-    
     mC2V_prev[:, :] = 0
     for ldpc_it in range(MAX_LDPC):
         mV2C = llr175[CVidx_all] - mC2V_prev
         tanh_mV2C = np.tanh(-mV2C)
         tanh_mC2V = np.prod(tanh_mV2C, axis=1, keepdims=True)
         tanh_mC2V[24:,:6] = np.prod(tanh_mV2C[24:,:6], axis=1, keepdims=True)
-        tanh_mC2V = tanh_mC2V / (tanh_mV2C + 1e-12)
-        alpha_atanh_approx = 1.18
+        orig_err = np.geterr()
+        np.seterr(all = 'ignore')
+        tanh_mC2V = np.divide(tanh_mC2V, tanh_mV2C)
         mC2V_curr  = tanh_mC2V / ((tanh_mC2V - alpha_atanh_approx) * (alpha_atanh_approx + tanh_mC2V))
+        np.seterr(**orig_err)
         np.add.at(llr175, CVidx_all, mC2V_curr - mC2V_prev)
         llr175[0]=0
         llr175 = np.clip(llr175, -7, 7)
@@ -218,7 +222,7 @@ class AudioIn:
             format = pyaudio.paInt16, channels=1, rate = SAMP_RATE, input = True, input_device_index = indev,
             frames_per_buffer = int(SAMP_RATE / (SYM_RATE * HPS)), stream_callback=self._callback,)
         self.grid_main_ptr = 0
-        self.set_pointer()
+        self.check_pointer()
         self.stream.start_stream()
 
     def find_device(self, device_str_contains):
@@ -234,7 +238,7 @@ class AudioIn:
                 return dev_idx
         print(f"[Audio] No audio device found matching {device_str_contains}")
 
-    def set_pointer(self):
+    def check_pointer(self):
         ptr = int((time.time() % 15) * SYM_RATE * HPS)
         if np.abs(self.grid_main_ptr - ptr) > 3:
             self.grid_main_ptr = ptr
@@ -252,15 +256,13 @@ class AudioIn:
         return (None, pyaudio.paContinue)
 
 class Receiver:
-    def __init__(self, mic_keywords = ['Mic', 'CODEC'], max_freq = 3100, output = 'udp'):
+    def __init__(self, mic_keywords = ['Mic', 'CODEC'], max_freq = 3100, output_type = 'udp'):
         self.audio_in = AudioIn(mic_keywords, max_freq)
-        self.output = output
-        self.early_decode_queue = queue.Queue()
-        self.decode_queue = queue.Queue()
+        self.output_type = output_type
+        self.candidates = []
         self.duplicate_filter = []
-        self.decoded_f_idxs = []
-        self.search_started = False
-        self.run_decodes = False
+        self.n_not_completed = 0
+        self.cycle_searched = False
         self.sock_out = None
         payload_symb_idxs = list(range(7, 36)) + list(range(43, 72))
         self.base_payload_hops = np.array([HPS * s for s in payload_symb_idxs])
@@ -272,39 +274,34 @@ class Receiver:
             csync[sym_idx, fbins] = 1.0
             csync[sym_idx, 7 * BPT:] = 0.0
         self.csync_flat =  csync.ravel()
-        self.send_output({'mtype':'info', 'info':'Receiver starting'})
+        self.send_output_type({'mtype':'info', 'info':'Receiver starting'})
         threading.Thread(target = self.manage_cycle, daemon=True ).start()
-        threading.Thread(target = self.manage_decodes, daemon=True ).start()
 
     def manage_cycle(self):
         while time.time() % 15 > 0.5:
             time.sleep(0.1)
         t_cyc, t_cyc_prev = 0, 0
         while True:
-            time.sleep(0.1)
+            time.sleep(0.01)
             t_cyc = time.time() % 15
             if t_cyc < t_cyc_prev:
-                self.audio_in.set_pointer()
-                self.search_started = False
-            if t_cyc > T_SEARCH_1 and not self.search_started:
-                self.search_started = True
-                self.run_decodes = False
-                while not self.decode_queue.empty():
-                    self.decode_queue.get()
-                while not self.early_decode_queue.empty():
-                    self.early_decode_queue.get()
+                self.audio_in.check_pointer()
+                self.cycle_searched = False
+            if t_cyc > T_SEARCH_1 and not self.cycle_searched:
+                self.cycle_searched = True
                 t0_cyc = 15 * int(time.time() / 15)
                 cycle_start_str = time.strftime("%y%m%d_%H%M%S", time.gmtime(t0_cyc))
                 info = f"{cycle_start_str} ========================================"
-                self.send_output({'mtype':'rollover', 'info':info})
+                self.send_output_type({'mtype':'rollover', 'info':info})
+                self.candidates = self.search(cycle_start_str)
                 self.duplicate_filter = []
-                self.decoded_f_idxs = []
-                self.search(cycle_start_str)
-                self.run_decodes = True
+                print(self.n_not_completed) # to tidy up and also add in 'time to spare' measure
+            else:
+                self.decode()
             t_cyc_prev = t_cyc
 
-    def send_output(self, msg_dict):
-        if self.output == 'print':
+    def send_output_type(self, msg_dict):
+        if self.output_type == 'print':
             print(msg_dict)
             return
         if self.sock_out is None:
@@ -313,7 +310,7 @@ class Receiver:
         self.sock_out.send(json.dumps(msg_dict).encode('utf-8'))
 
     def search(self, cycle_start_str):
-        origins = []
+        candidates = []
         for f0_idx in range(int(100 / 3.125), self.audio_in.nFreqs - 8 * BPT, 1):
             time.sleep(0)
             freq_idxs = f0_idx + self.base_freq_idxs
@@ -328,58 +325,34 @@ class Receiver:
             if new_origin['score'] > MIN_SCORE:
                 hops, freq_idxs = new_origin['h0_idx'] + self.base_payload_hops, new_origin['f0_idx'] + self.base_freq_idxs
                 p_idx = np.ix_(hops, freq_idxs)
-                new_origin.update({'p_idx':p_idx})
-                origins.append(new_origin)
-        origins.sort(key = lambda o: int(o['h0_idx']))
-        for origin in origins:
-            self.early_decode_queue.put(origin)
-            self.decode_queue.put(origin)
+                new_origin.update({'p_idx':p_idx, 'attempt':0, 'decode_result':None})
+                candidates.append(new_origin)
+        candidates.sort(key = lambda c: int(c['h0_idx']))
+        return candidates
 
-    def signal_arriving(self, origin, last_sym = 57):
-        return origin['h0_idx'] < self.audio_in.grid_main_ptr < origin['h0_idx'] + self.base_payload_hops[last_sym]
+    def signal_arriving(self, cand, last_sym = 57):
+        return cand['h0_idx'] < self.audio_in.grid_main_ptr < cand['h0_idx'] + self.base_payload_hops[last_sym]
 
-    def manage_decodes(self):
-        decode_pending = False
-        early_decode_pending = False
-        while True:
-            time.sleep(0)
-            msg_tuple = None
-            
-            if self.run_decodes and not self.early_decode_queue.empty():
-                if not early_decode_pending:
-                    origin = self.early_decode_queue.get()
-                    if not origin['f0_idx'] in self.decoded_f_idxs:
-                        early_decode_pending = True
-                if early_decode_pending and not self.signal_arriving(origin, last_sym = 33):
-                    p = self.audio_in.grid_main[origin['p_idx']]
-                    msg_tuple = decode_raw91(p)
-                    hcode = 91
-                    early_decode_pending = False
-                    if msg_tuple:
-                        self.decoded_f_idxs.append(origin['f0_idx'])
-                    
-            if self.run_decodes and not self.decode_queue.empty():
-                if not decode_pending:
-                    origin = self.decode_queue.get()
-                    if not origin['f0_idx'] in self.decoded_f_idxs:
-                        decode_pending = True
-                if decode_pending and not self.signal_arriving(origin, last_sym = 57):
-                    p = self.audio_in.grid_main[origin['p_idx']]
-                    msg_tuple, hcode = decode_ldpc(p)
-                    decode_pending = False
-                    if msg_tuple:
-                        self.decoded_f_idxs.append(origin['f0_idx'])
+    def decode(self):
+        to_decode = [c for c in self.candidates if c['attempt'] < 2 and not c['decode_result']]
+        self.n_not_completed = len(to_decode)
+        for c in to_decode:
+            if c['attempt'] == 0 and not self.signal_arriving(c, last_sym = 33):
+                p = self.audio_in.grid_main[c['p_idx']]
+                c['decode_result'], hcode = decode_raw91(p), 91
+            if c['attempt'] == 1 and not self.signal_arriving(c, last_sym = 57):
+                p = self.audio_in.grid_main[c['p_idx']]
+                c['decode_result'], hcode = decode_ldpc(p)
+            c['attempt'] += 1
 
-            if msg_tuple and not msg_tuple in self.duplicate_filter:
+            if c['decode_result'] and not c['decode_result'] in self.duplicate_filter:
                 their_snr = np.clip(int(np.max(p) - np.min(p)) - 58, -24, 24)
-                self.duplicate_filter.append(msg_tuple)
-                self.send_output({'mtype':'decode', 'cyclestart_string': origin['cs'], 't_decode':time.time(),
-                                  'fHz':f"{origin['fHz']:7.2f}", 'dt':f"{origin['dt']:+04.2f}", 'hcode':hcode,
-                                  'their_snr':f"{their_snr:+03d}", 'msg_tuple':msg_tuple})
-                msg_tuple = None
-                    
+                self.duplicate_filter.append(c['decode_result'])
+                self.send_output_type({'mtype':'decode', 'cyclestart_string': c['cs'], 't_decode':time.time(),
+                                  'fHz':f"{c['fHz']:7.2f}", 'dt':f"{c['dt']:+04.2f}", 'hcode':hcode,
+                                  'their_snr':f"{their_snr:+03d}", 'msg_tuple':c['decode_result']})
 
 if __name__ == "__main__":
-    rx = Receiver(mic_keywords = ['Mic', 'CODEC'], max_freq = 2900, output = 'print')
+    rx = Receiver(mic_keywords = ['Mic', 'CODEC'], max_freq = 2900, output_type = 'print')
  
 

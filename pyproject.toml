@@ -1,5 +1,5 @@
 [project]
-name = "MiniPyFT8"
+name = "PyFT8m"
 version = "0.0.1"
 license = "GPL-3.0-or-later"
 
@@ -26,11 +26,11 @@ classifiers = [
 keywords = ["ham radio", "radio", "FT8", "LDPC", "CPMFSK"]
 
 [project.urls]
-Homepage = "https://github.com/G1OJS/MiniPyFT8"
-Issues = "https://github.com/G1OJS/MiniPyFT8/issues"
+Homepage = "https://github.com/G1OJS/PyFT8m"
+Issues = "https://github.com/G1OJS/PyFT8m/issues"
 
 [tool.setuptools]
-packages = ["MiniPyFT8"]
+packages = ["PyFT8m"]
 license-files = ["LICENSE"]
 
 [project.scripts]

@@ -3,18 +3,15 @@ win32process.SetPriorityClass(win32api.GetCurrentProcess(), win32process.HIGH_PR
 
 import numpy as np
 import time, pickle, threading, pyaudio, sys, queue, os, socket, json
-from MiniPyFT8.receiver import Receiver
+from PyFT8m.receiver import Receiver
 
 finished_audio = False
-gui = None
 
 class SoundcardOut:
-    def __init__(self, outputcard_keywords, wav_files, wav_file_time_offset = 0):
-        self.wav_file_time_offset = wav_file_time_offset
+    def __init__(self, outputcard_keywords, wav_files):
+        self.wav_files = wav_files
         self.output_device_index = None
         self.pya = pyaudio.PyAudio()
-        threading.Thread(target = self.play_wavs, args = (wav_files,), daemon = True).start()
-        
         if outputcard_keywords:
             for dev_idx in range(self.pya.get_device_count()):
                 name = self.pya.get_device_info_by_index(dev_idx)['name']
@@ -28,17 +25,17 @@ class SoundcardOut:
                 print(f"[Audio Out] No output audio device found matching {outputcard_keywords}", verbose = True)
                 sys.exit(1)
 
-    def play_wavs(self, wav_files, sr=12000):
+    def start_wavs(self):
+        threading.Thread(target = self.play_wavs, daemon = True).start()
+
+    def play_wavs(self, sr=12000):
         global finished_audio
         import wave
-        t = (self.wav_file_time_offset - time.time()) %15
-        time.sleep(t)
-        dt = 0.6/4
-        for i, w in enumerate(wav_files):
+        for i, w in enumerate(self.wav_files):
             print(f"Start playing wav file {w}")
             wv = wave.open(w, 'rb')
             audio_bytes = wv.readframes(sr*16)
-            audio_bytes = audio_bytes[-int(sr*(15-dt))*2:]
+            audio_bytes = audio_bytes[-int(sr*(15-0.6/4))*2:]
 
             stream = self.pya.open(format=pyaudio.paInt16, channels=1, rate = sr, output=True,
                               output_device_index = self.output_device_index)
@@ -91,10 +88,12 @@ def monitor_udp():
             msg_dict = json.loads(rx_bytes.decode('utf-8'))
             if msg_dict['mtype'] == 'decode':
                 py_q.put(msg_dict)
+            else:
+                print(msg_dict)
 
 def monitor_decodes():
     while not finished_audio:
-        time.sleep(1)
+        time.sleep(0.1)
         
         while not py_q.empty():
             time.sleep(0)
@@ -108,7 +107,7 @@ def monitor_decodes():
             diff = decode_count - baseline_decode_count
             txt = f"{m['hcode']}, {m['msg_tuple']}"
             py_info  = f"{decode_count:03d}({diff:+03d}) {py_cycle[1]:03d} {py_times[-1]:7.2f} {txt}"
-            with open('MiniPyFT8.txt', 'a') as f:
+            with open(output_files[0], 'a') as f:
                 f.write(f"{py_info}\n")
             print(py_info)
             
@@ -124,7 +123,7 @@ def monitor_decodes():
                     ws_times.append(wst)
                     decode_count = len(ws_times)
                     ws_info  = f"{decode_count:03d} {ws_cycle[1]:3d} {ws_times[-1]:7.2f} ~ {m['ws_msg']}"
-                    with open('wsjtx.txt', 'a') as f:
+                    with open(output_files[1], 'a') as f:
                         f.write(f"{ws_info}\n")
                    # print(ws_info)
 
@@ -135,10 +134,9 @@ def do_test(input_device_keywords, wav_range = None):
     ws_cycle = ['', 0]
     py_cycle = ['', 0]
 
-    with open('MiniPyFT8.txt','w') as f:
-        f.write('')
-    with open('wsjtx.txt','w') as f:
-        f.write('')
+    for fn in output_files:
+        with open(fn,'w') as f:
+            f.write('')
     baseline_counts = []
     
     if os.path.exists(baseline_file):
@@ -164,18 +162,18 @@ def do_test(input_device_keywords, wav_range = None):
     rx = Receiver(mic_keywords = input_device_keywords)
     threading.Thread(target = monitor_decodes, daemon = True).start()
     threading.Thread(target = monitor_udp, daemon = True).start()
+    soundout = SoundcardOut("CABLE, Input", wav_files)
 
-    t = 15-(time.time() % 15)
-    if t > 0.05:
-        print(f"Waiting to start test on next cycle ({t:6.1f}s)")
-        time.sleep(t)
+    wav_file_time_offset = -1
+    t = (wav_file_time_offset - time.time()) %15
+    print(f"Waiting to play first wav file {t:6.2f}s")
+    time.sleep(t)
     t_start = time.time()
-
-    if wav_files:
-       soundout = SoundcardOut("CABLE, Input", wav_files, wav_file_time_offset = -1)
+    soundout.start_wavs()
 
 wav_folder = "C:/Users/drala/Documents/Projects/GitHub/ft8_lib/test/wav/20m_busy"
-baseline_file = 'MiniPyFT8_8_28_baseline.txt'
+baseline_file = 'PyFT8m_baseline.txt'
+output_files = ['PyFT8m.txt', 'wsjtx.txt']
 
 #do_test("Mic, CODEC")
 do_test("CABLE, Output", [8,28])
