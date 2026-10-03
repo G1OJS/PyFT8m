@@ -5,8 +5,9 @@ HPS, BPT = 4, 2
 SYM_RATE, SAMP_RATE = 6.25, 12000
 HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
-MIN_SCORE = 250
-MAX_LDPC = 18
+MIN_SCORE = 100
+MAX_CANDS = 450
+MAX_LDPC = 10
 H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-2.5, 3.5]]
 
 call_hashes = {}
@@ -172,12 +173,18 @@ def decode_raw91(p):
             return msg_tuple, f"early_GOOD91{['','_CQ'][i]}"
     return None, None
 
+def bits_to_int(llr):
+    bits_int = 0
+    for bit in (llr > 0).astype(int).tolist():
+        bits_int = (bits_int << 1) | bit
+    return bits_int
+
 CVidx_all = np.array([[4,31,59,91,92,96,153],[8,25,63,83,93,96,148],[5,34,65,78,98,107,154],[11,37,67,87,101,139,158],[8,40,70,82,104,114,145],[14,41,71,88,102,123,156],[17,37,74,81,109,131,154],[45,55,64,111,130,161,173],[18,36,76,89,113,114,143],[21,45,78,83,117,121,151],[19,35,59,73,110,125,161],[7,49,58,90,100,105,168],[25,53,69,90,101,130,156],[20,46,65,80,120,140,170],[1,4,52,57,86,136,152],[26,51,56,91,122,137,168],[2,27,41,61,62,115,133],[28,48,70,85,105,129,158],[12,43,66,89,97,135,159],[10,44,82,91,111,144,149],[30,50,60,86,137,142,162],[10,53,66,84,112,128,165],[28,29,84,88,117,143,150],[15,58,60,74,111,150,163],[5,32,60,93,115,146,0],[6,24,61,94,122,151,0],[7,33,62,95,96,143,0],[6,32,64,97,126,138,0],[9,35,66,99,139,146,0],[10,36,67,100,107,126,0],[12,38,68,102,105,155,0],[13,39,69,103,149,162,0],[15,42,59,106,123,159,0],[1,33,72,106,107,157,0],[16,43,73,108,141,160,0],[11,44,75,110,121,166,0],[8,46,71,112,119,166,0],[19,38,77,104,116,163,0],[20,47,70,92,138,165,0],[2,48,74,113,128,160,0],[22,47,58,118,127,164,0],[16,39,62,112,134,158,0],[23,43,79,120,131,145,0],[20,36,63,94,136,161,0],[14,31,79,98,132,164,0],[3,44,80,124,127,169,0],[19,46,81,117,135,167,0],[12,50,61,118,119,144,0],[13,51,64,114,118,157,0],[24,52,76,129,148,149,0],[21,54,77,100,140,171,0],[35,82,133,142,171,174,0],[14,30,83,113,125,170,0],[4,29,68,120,134,173,0],[52,84,110,115,145,168,0],[7,50,81,99,132,173,0],[23,55,67,95,172,174,0],[26,41,77,109,141,148,0],[27,40,56,124,125,126,0],[18,49,55,124,141,167,0],[6,33,85,108,116,156,0],[9,54,63,131,147,155,0],[22,53,68,109,121,174,0],[3,13,48,78,95,123,0],[31,69,133,150,155,169,0],[5,39,75,102,136,167,0],[2,54,86,101,135,164,0],[15,56,87,108,119,171,0],[23,34,71,94,127,153,0],[11,49,88,92,142,157,0],[29,34,87,97,147,162,0],[22,57,85,93,140,159,0],[28,32,72,103,132,166,0],[1,26,45,80,128,147,0],[17,27,89,103,116,153,0],[51,57,98,163,165,172,0],[21,37,73,138,152,169,0],[16,47,76,130,137,154,0],[3,24,30,72,104,139,0],[9,40,90,106,134,151,0],[18,42,79,144,146,152,0],[25,38,65,99,122,160,0],[17,42,75,129,170,172,0]], dtype = np.int16)
 llr175 = np.zeros(175, dtype=np.float32)
 mC2V_prev = np.zeros(CVidx_all.shape, dtype=np.float32)
 import warnings
 warnings.filterwarnings("error")
-def decode_ldpc(p):
+def decode(p):
     global llr175, mC2V_prev
     alpha_atanh_approx = 1.18
     llra = np.max(p[:, [4,5,6,7]], axis=1) - np.max(p[:, [0,1,2,3]], axis=1)
@@ -187,7 +194,7 @@ def decode_ldpc(p):
     llr = llr.ravel()
     llr = 3.5 * llr / (np.std(llr) + 0.01)
     llr = np.clip(llr, -3.7, 3.7)
-    for i in range(2):
+    for i in range(1):
         if i == 1:
             llr[:29] = -5
             llr[26] = 5
@@ -211,12 +218,82 @@ def decode_ldpc(p):
             parity = np.sum(bits, axis=1) & 1
             ncheck = int(np.sum(parity))
             if(ncheck == 0):
-                bits91_int = 0
-                for bit in (llr175[1:92] > 0).astype(int).tolist():
-                    bits91_int = (bits91_int << 1) | bit
+                bits91_int = bits_to_int(llr175[1:92])
                 msg_tuple, bits77_int = crc_unpack91(bits91_int)
                 return msg_tuple, f"LDPC{['','_CQ'][i]}_{ldpc_it}_its"
+      #  msg_tuple, order = osd(llr)
+      #  if msg_tuple:
+      #      return msg_tuple, f"OSD{['','_CQ'][i]}_ord{order}"
     return None, ''
+
+#============== OSD ===========================================================
+generator_matrix_rows = ["8329ce11bf31eaf509f27fc",  "761c264e25c259335493132",  "dc265902fb277c6410a1bdc",  "1b3f417858cd2dd33ec7f62",  "09fda4fee04195fd034783a",  "077cccc11b8873ed5c3d48a",  "29b62afe3ca036f4fe1a9da",  "6054faf5f35d96d3b0c8c3e",  "e20798e4310eed27884ae90",  "775c9c08e80e26ddae56318",  "b0b811028c2bf997213487c",  "18a0c9231fc60adf5c5ea32",  "76471e8302a0721e01b12b8",  "ffbccb80ca8341fafb47b2e",  "66a72a158f9325a2bf67170",  "c4243689fe85b1c51363a18",  "0dff739414d1a1b34b1c270",  "15b48830636c8b99894972e",  "29a89c0d3de81d665489b0e",  "4f126f37fa51cbe61bd6b94",  "99c47239d0d97d3c84e0940",  "1919b75119765621bb4f1e8",  "09db12d731faee0b86df6b8",  "488fc33df43fbdeea4eafb4",  "827423ee40b675f756eb5fe",  "abe197c484cb74757144a9a",  "2b500e4bc0ec5a6d2bdbdd0",  "c474aa53d70218761669360",  "8eba1a13db3390bd6718cec",  "753844673a27782cc42012e",  "06ff83a145c37035a5c1268",  "3b37417858cc2dd33ec3f62",  "9a4a5a28ee17ca9c324842c",  "bc29f465309c977e89610a4",  "2663ae6ddf8b5ce2bb29488",  "46f231efe457034c1814418",  "3fb2ce85abe9b0c72e06fbe",  "de87481f282c153971a0a2e",  "fcd7ccf23c69fa99bba1412",  "f0261447e9490ca8e474cec",  "4410115818196f95cdd7012",  "088fc31df4bfbde2a4eafb4",  "b8fef1b6307729fb0a078c0",  "5afea7acccb77bbc9d99a90",  "49a7016ac653f65ecdc9076",  "1944d085be4e7da8d6cc7d0",  "251f62adc4032f0ee714002",  "56471f8702a0721e00b12b8",  "2b8e4923f2dd51e2d537fa0",  "6b550a40a66f4755de95c26",  "a18ad28d4e27fe92a4f6c84",  "10c2e586388cb82a3d80758",  "ef34a41817ee02133db2eb0",  "7e9c0c54325a9c15836e000",  "3693e572d1fde4cdf079e86",  "bfb2cec5abe1b0c72e07fbe",  "7ee18230c583cccc57d4b08",  "a066cb2fedafc9f52664126",  "bb23725abc47cc5f4cc4cd2",  "ded9dba3bee40c59b5609b4",  "d9a7016ac653e6decdc9036",  "9ad46aed5f707f280ab5fc4",  "e5921c77822587316d7d3c2",  "4f14da8242a8b86dca73352",  "8b8b507ad467d4441df770e",  "22831c9cf1169467ad04b68",  "213b838fe2ae54c38ee7180",  "5d926b6dd71f085181a4e12",  "66ab79d4b29ee6e69509e56",  "958148682d748a38dd68baa",  "b8ce020cf069c32a723ab14",  "f4331d6d461607e95752746",  "6da23ba424b9596133cf9c8",  "a636bcbc7b30c5fbeae67fe",  "5cb0d86a07df654a9089a20",  "f11f106848780fc9ecdd80a",  "1fbb5364fb8d2c9d730d5ba",  "fcb86bc70a50c9d02a5d034",  "a534433029eac15f322e34c",  "c989d9c7c3d3b8c55d75130",  "7bb38b2f0186d46643ae962",  "2644ebadeb44b9467d1f42c",  "608cc857594bfbb55d69600"]
+kGEN = np.array([int(row,16)>>1 for row in generator_matrix_rows])
+A = np.zeros((83, 91), dtype=np.uint8)
+for i, row in enumerate(kGEN):
+    for j in range(91):
+        A[i, 90 - j] = (row >> j) & 1
+G0 = np.concatenate([np.eye(91, dtype=np.uint8), A.T],axis=1)
+
+def osd(llr):
+    chbits174 = (llr>0).astype(np.uint8)
+    chvals174 = np.abs(llr)
+
+    rowperm = np.arange(91)
+    colperm = np.argsort(-np.abs(llr))
+    curr_row = 0
+    G = G0.copy()
+    for curr_col in range(174):
+        ones_below = np.where(G[rowperm[curr_row:], colperm[curr_col]] == 1)[0]
+        if ones_below.size > 0:
+            swap_row = curr_row + ones_below[0]
+            rowperm[[curr_row, swap_row]] = rowperm[[swap_row, curr_row]]
+            r_curr = rowperm[curr_row]
+            c_curr = colperm[curr_col]
+            g_c_curr = G[:, c_curr].copy()
+            g_c_curr[r_curr] = 0
+            rows_to_xor = np.where(g_c_curr == 1)[0]
+            G[rows_to_xor, :] ^= G[r_curr, :]
+            colperm[[curr_row, curr_col]] = colperm[[curr_col, curr_row]]  
+            curr_row += 1
+            if curr_row > 90:
+                break
+          
+    chbits91 = chbits174[colperm][:91]
+    chbits91[rowperm] = chbits91
+
+    base_cw = ((chbits91 @ G) & 1)
+    bits91_int = bits_to_int(base_cw)
+    msg_tuple, bits77_int = crc_unpack91(bits91_int)
+    if msg_tuple:
+        return msg_tuple, 0
+
+    fliplist = rowperm[::-1]
+    current_best_distance = 1e20
+    cw_out91 = None
+    for i in range(91):
+        # Single flip
+        cw = base_cw ^ G[fliplist[i]]
+        # Double flips with every j < i
+        if i:
+            cw2 = base_cw ^ G[fliplist[i]] ^ G[fliplist[:i]]
+            candidates = np.vstack((cw, cw2))
+        else:
+            candidates = cw[None, :]
+
+        distances = np.sum(np.abs(llr)[None, :] * (candidates != chbits174), axis=1)
+        best_idx = np.argmin(distances)
+        if distances[best_idx] < current_best_distance:
+            current_best_distance = distances[best_idx]
+            cw_out91 = candidates[best_idx, :91].copy()
+
+        if cw_out91 is not None:
+            bits91_int = bits_to_int(cw_out91)
+            msg_tuple, bits77_int = crc_unpack91(bits91_int)
+            if msg_tuple:
+                return msg_tuple, 2
+            
+    return None, None
 
 #============== AUDIO ========================================================
 class AudioIn:
@@ -273,7 +350,6 @@ class Receiver:
         self.candidates = []
         self.duplicate_filter = []
         self.last_decode_attempt = 0
-        self.n_not_completed = 0
         self.cycle_searched = False
         self.sock_out = None
         payload_symb_idxs = list(range(7, 36)) + list(range(43, 72))
@@ -301,6 +377,8 @@ class Receiver:
                 self.cycle_searched = False
             if t_cyc > T_SEARCH_1 and not self.cycle_searched:
                 self.cycle_searched = True
+                to_decode = [c for c in self.candidates if c['attempt'] < 2  and not c['decode_result']]
+                len_cands = len(self.candidates)
                 t0_cyc = 15 * int(time.time() / 15)
                 cycle_start_str = time.strftime("%y%m%d_%H%M%S", time.gmtime(t0_cyc))
                 info = f"{cycle_start_str} ========================================"
@@ -308,7 +386,7 @@ class Receiver:
                 self.candidates = self.search(cycle_start_str)
                 self.duplicate_filter = []
                 if self.last_decode_attempt > 0:
-                    print(f"Last decode {self.last_decode_attempt % 15:6.1f}, {self.n_not_completed} not attempted")
+                    print(f"Last decode attempt {self.last_decode_attempt % 15:6.1f}, {len(to_decode)}/{len_cands} not attempted")
                 print(f"Search finished at {time.time() % 15:6.1f} with {len(self.candidates)} candidates")
             else:
                 self.decode()
@@ -341,6 +419,8 @@ class Receiver:
                 p_idx = np.ix_(hops, freq_idxs)
                 new_origin.update({'p_idx':p_idx, 'attempt':0, 'decode_result':None})
                 candidates.append(new_origin)
+        candidates.sort(key = lambda c: -c['score'])
+        candidates = candidates[:MAX_CANDS]
         candidates.sort(key = lambda c: int(c['h0_idx']))
         return candidates
 
@@ -350,14 +430,13 @@ class Receiver:
             late = self.audio_in.tfgrid_ptr > cand['h0_idx'] + self.base_payload_hops[last_sym]
             return late or early 
         to_decode = [c for c in self.candidates if c['attempt'] < 2 and not c['decode_result']]
-        self.n_not_completed = len(to_decode)
         for c in to_decode:
-            if c['attempt'] == 0 and signal_available(c, last_sym = 31):
+            if c['attempt'] == 0 and signal_available(c, last_sym = 32):
                 p = self.audio_in.tfgrid[c['p_idx']]
                 c['decode_result'], decode_info = decode_raw91(p)
             if c['attempt'] == 1 and signal_available(c, last_sym = 57):
                 p = self.audio_in.tfgrid[c['p_idx']]
-                c['decode_result'], decode_info = decode_ldpc(p)
+                c['decode_result'], decode_info = decode(p)
             c['attempt'] += 1
             self.last_decode_attempt = time.time()
 
