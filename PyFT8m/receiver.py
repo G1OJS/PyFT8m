@@ -5,7 +5,7 @@ HPS, BPT = 4, 2
 SYM_RATE, SAMP_RATE = 6.25, 12000
 HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
-MIN_SCORE = 100
+MIN_SCORE = 250
 MAX_LDPC = 18
 H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-2.5, 3.5]]
 
@@ -227,12 +227,12 @@ class AudioIn:
         self.audio_buffer = np.zeros(fft_len, dtype=np.float32)
         self.fft_in = np.zeros(fft_len, dtype=np.float32)
         self.fft_window = fft_window=np.hanning(fft_len).astype(np.float32)
-        self.grid_main = np.ones((HPC, self.nFreqs), dtype = np.float32)
+        self.tfgrid = np.ones((HPC, self.nFreqs), dtype = np.float32)
         indev = self.find_device(input_device_keywords)
         self.stream = pyaudio.PyAudio().open(
             format = pyaudio.paInt16, channels=1, rate = SAMP_RATE, input = True, input_device_index = indev,
             frames_per_buffer = int(SAMP_RATE / (SYM_RATE * HPS)), stream_callback=self._callback,)
-        self.grid_main_ptr = 0
+        self.tfgrid_ptr = 0
         self.check_pointer()
         self.stream.start_stream()
 
@@ -251,8 +251,8 @@ class AudioIn:
 
     def check_pointer(self):
         ptr = int((time.time() % 15) * SYM_RATE * HPS)
-        if np.abs(self.grid_main_ptr - ptr) > 3:
-            self.grid_main_ptr = ptr
+        if np.abs(self.tfgrid_ptr - ptr) > 3:
+            self.tfgrid_ptr = ptr
             print('set pointer')
 
     def _callback(self, in_data, frame_count, time_info, status_flags):
@@ -262,8 +262,8 @@ class AudioIn:
         self.audio_buffer[-ns:] = samples
         np.multiply(self.audio_buffer, self.fft_window, out=self.fft_in)
         z = np.fft.rfft(self.fft_in)[:self.nFreqs]
-        self.grid_main[self.grid_main_ptr, :] = 10*np.log10(z.real*z.real + z.imag*z.imag)
-        self.grid_main_ptr = (self.grid_main_ptr + 1) % HPC
+        self.tfgrid[self.tfgrid_ptr, :] = 10*np.log10(z.real*z.real + z.imag*z.imag)
+        self.tfgrid_ptr = (self.tfgrid_ptr + 1) % HPC
         return (None, pyaudio.paContinue)
 
 class Receiver:
@@ -309,6 +309,7 @@ class Receiver:
                 self.duplicate_filter = []
                 if self.last_decode_attempt > 0:
                     print(f"Last decode {self.last_decode_attempt % 15:6.1f}, {self.n_not_completed} not attempted")
+                print(f"Search finished at {time.time() % 15:6.1f} with {len(self.candidates)} candidates")
             else:
                 self.decode()
             t_cyc_prev = t_cyc
@@ -327,7 +328,7 @@ class Receiver:
         for f0_idx in range(int(100 / 3.125), self.audio_in.nFreqs - 8 * BPT, 1):
             time.sleep(0)
             freq_idxs = f0_idx + self.base_freq_idxs
-            p = self.audio_in.grid_main[:, f0_idx:f0_idx+8*BPT]
+            p = self.audio_in.tfgrid[:, f0_idx:f0_idx+8*BPT]
             new_origin = {'score':0}
             for h0_idx in range(H0_RANGE[0], H0_RANGE[1]):
                 sync_score = float(np.dot(p[h0_idx + self.hop_idxs_Costas + 36 * HPS, :].ravel(), self.csync_flat))
@@ -343,18 +344,19 @@ class Receiver:
         candidates.sort(key = lambda c: int(c['h0_idx']))
         return candidates
 
-    def signal_arriving(self, cand, last_sym = 57):
-        return cand['h0_idx'] < self.audio_in.grid_main_ptr < cand['h0_idx'] + self.base_payload_hops[last_sym]
-
     def decode(self):
+        def signal_available(cand, last_sym = 57):
+            early = self.audio_in.tfgrid_ptr < cand['h0_idx']
+            late = self.audio_in.tfgrid_ptr > cand['h0_idx'] + self.base_payload_hops[last_sym]
+            return late or early 
         to_decode = [c for c in self.candidates if c['attempt'] < 2 and not c['decode_result']]
         self.n_not_completed = len(to_decode)
         for c in to_decode:
-            if c['attempt'] == 0 and not self.signal_arriving(c, last_sym = 33):
-                p = self.audio_in.grid_main[c['p_idx']]
+            if c['attempt'] == 0 and signal_available(c, last_sym = 31):
+                p = self.audio_in.tfgrid[c['p_idx']]
                 c['decode_result'], decode_info = decode_raw91(p)
-            if c['attempt'] == 1 and not self.signal_arriving(c, last_sym = 57):
-                p = self.audio_in.grid_main[c['p_idx']]
+            if c['attempt'] == 1 and signal_available(c, last_sym = 57):
+                p = self.audio_in.tfgrid[c['p_idx']]
                 c['decode_result'], decode_info = decode_ldpc(p)
             c['attempt'] += 1
             self.last_decode_attempt = time.time()

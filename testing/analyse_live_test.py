@@ -71,7 +71,7 @@ def list_methods(file):
 #list_methods('PyFT8.txt')
 
 plot_staircase([('PyFT8m.txt', 'PyFT8m', 'green', 0),
-                ('PyFT8m_baseline.txt', 'PyFT8m_baseline', 'orange', 15),  
+                ('PyFT8m_baseline.txt', 'PyFT8m_baseline', 'orange', 0),  
                 ('PyFT8_baseline.txt', 'PyFT8', 'blue', 0),
                 ('WSJTx302_FAST.txt', 'WSJT-x_3.0.2_FAST', 'purple', 0)])
 
