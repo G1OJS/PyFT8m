@@ -3,6 +3,7 @@ import time, pyaudio, threading, queue, socket, json
 
 HPS, BPT = 4, 2
 SYM_RATE, SAMP_RATE = 6.25, 12000
+HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
 MIN_SCORE = 100
 MAX_LDPC = 18
@@ -153,16 +154,23 @@ def crc_unpack91(bits91_int):
     return msg, bits77_int
 
 def decode_raw91(p):
-    syms = np.argmax(p[:31, :], axis = 1)
+    def syms_to_int(syms):
+        bint = 0
+        for s in syms:
+            bint = (bint << 3) | (s & 7)
+        return bint
+    ch_syms = np.argmax(p[:31, :], axis = 1)
     de_gray = [0,1,3,2,6,4,5,7]
-    syms = [de_gray[s] for s in syms]
-    bits91_int = 0
-    for s in syms:
-        bits91_int = (bits91_int << 3) | (s & 7)
-    bits91_int >>= 2
-    msg_tuple, bits77_int = crc_unpack91(bits91_int)
-    if msg_tuple:
-        return msg_tuple
+    for i in range(2):
+        if i == 1:
+            ch_syms[:11] = 0
+            ch_syms[8] = 1
+        syms = [de_gray[s] for s in ch_syms]
+        bits91_int = syms_to_int(syms) >> 2
+        msg_tuple, bits77_int = crc_unpack91(bits91_int)
+        if msg_tuple:
+            return msg_tuple, f"early_GOOD91{['','_CQ'][i]}"
+    return None, None
 
 CVidx_all = np.array([[4,31,59,91,92,96,153],[8,25,63,83,93,96,148],[5,34,65,78,98,107,154],[11,37,67,87,101,139,158],[8,40,70,82,104,114,145],[14,41,71,88,102,123,156],[17,37,74,81,109,131,154],[45,55,64,111,130,161,173],[18,36,76,89,113,114,143],[21,45,78,83,117,121,151],[19,35,59,73,110,125,161],[7,49,58,90,100,105,168],[25,53,69,90,101,130,156],[20,46,65,80,120,140,170],[1,4,52,57,86,136,152],[26,51,56,91,122,137,168],[2,27,41,61,62,115,133],[28,48,70,85,105,129,158],[12,43,66,89,97,135,159],[10,44,82,91,111,144,149],[30,50,60,86,137,142,162],[10,53,66,84,112,128,165],[28,29,84,88,117,143,150],[15,58,60,74,111,150,163],[5,32,60,93,115,146,0],[6,24,61,94,122,151,0],[7,33,62,95,96,143,0],[6,32,64,97,126,138,0],[9,35,66,99,139,146,0],[10,36,67,100,107,126,0],[12,38,68,102,105,155,0],[13,39,69,103,149,162,0],[15,42,59,106,123,159,0],[1,33,72,106,107,157,0],[16,43,73,108,141,160,0],[11,44,75,110,121,166,0],[8,46,71,112,119,166,0],[19,38,77,104,116,163,0],[20,47,70,92,138,165,0],[2,48,74,113,128,160,0],[22,47,58,118,127,164,0],[16,39,62,112,134,158,0],[23,43,79,120,131,145,0],[20,36,63,94,136,161,0],[14,31,79,98,132,164,0],[3,44,80,124,127,169,0],[19,46,81,117,135,167,0],[12,50,61,118,119,144,0],[13,51,64,114,118,157,0],[24,52,76,129,148,149,0],[21,54,77,100,140,171,0],[35,82,133,142,171,174,0],[14,30,83,113,125,170,0],[4,29,68,120,134,173,0],[52,84,110,115,145,168,0],[7,50,81,99,132,173,0],[23,55,67,95,172,174,0],[26,41,77,109,141,148,0],[27,40,56,124,125,126,0],[18,49,55,124,141,167,0],[6,33,85,108,116,156,0],[9,54,63,131,147,155,0],[22,53,68,109,121,174,0],[3,13,48,78,95,123,0],[31,69,133,150,155,169,0],[5,39,75,102,136,167,0],[2,54,86,101,135,164,0],[15,56,87,108,119,171,0],[23,34,71,94,127,153,0],[11,49,88,92,142,157,0],[29,34,87,97,147,162,0],[22,57,85,93,140,159,0],[28,32,72,103,132,166,0],[1,26,45,80,128,147,0],[17,27,89,103,116,153,0],[51,57,98,163,165,172,0],[21,37,73,138,152,169,0],[16,47,76,130,137,154,0],[3,24,30,72,104,139,0],[9,40,90,106,134,151,0],[18,42,79,144,146,152,0],[25,38,65,99,122,160,0],[17,42,75,129,170,172,0]], dtype = np.int16)
 llr175 = np.zeros(175, dtype=np.float32)
@@ -179,44 +187,47 @@ def decode_ldpc(p):
     llr = llr.ravel()
     llr = 3.5 * llr / (np.std(llr) + 0.01)
     llr = np.clip(llr, -3.7, 3.7)
-    llr175[1:] = llr
-    mC2V_prev[:, :] = 0
-    for ldpc_it in range(MAX_LDPC):
-        mV2C = llr175[CVidx_all] - mC2V_prev
-        tanh_mV2C = np.tanh(-mV2C)
-        tanh_mC2V = np.prod(tanh_mV2C, axis=1, keepdims=True)
-        tanh_mC2V[24:,:6] = np.prod(tanh_mV2C[24:,:6], axis=1, keepdims=True)
-        orig_err = np.geterr()
-        np.seterr(all = 'ignore')
-        tanh_mC2V = np.divide(tanh_mC2V, tanh_mV2C)
-        mC2V_curr  = tanh_mC2V / ((tanh_mC2V - alpha_atanh_approx) * (alpha_atanh_approx + tanh_mC2V))
-        np.seterr(**orig_err)
-        np.add.at(llr175, CVidx_all, mC2V_curr - mC2V_prev)
-        llr175[0]=0
-        llr175 = np.clip(llr175, -7, 7)
-        mC2V_prev = mC2V_curr
-        bits = llr175[CVidx_all] > 0
-        parity = np.sum(bits, axis=1) & 1
-        ncheck = int(np.sum(parity))
-        if(ncheck == 0):
-            bits91_int = 0
-            for bit in (llr175[1:92] > 0).astype(int).tolist():
-                bits91_int = (bits91_int << 1) | bit
-            msg_tuple, bits77_int = crc_unpack91(bits91_int)
-            return msg_tuple, ldpc_it
-    return None, 0
+    for i in range(2):
+        if i == 1:
+            llr[:29] = -5
+            llr[26] = 5
+        llr175[1:] = llr
+        mC2V_prev[:, :] = 0
+        for ldpc_it in range(MAX_LDPC):
+            mV2C = llr175[CVidx_all] - mC2V_prev
+            tanh_mV2C = np.tanh(-mV2C)
+            tanh_mC2V = np.prod(tanh_mV2C, axis=1, keepdims=True)
+            tanh_mC2V[24:,:6] = np.prod(tanh_mV2C[24:,:6], axis=1, keepdims=True)
+            orig_err = np.geterr()
+            np.seterr(all = 'ignore')
+            tanh_mC2V = np.divide(tanh_mC2V, tanh_mV2C)
+            mC2V_curr  = tanh_mC2V / ((tanh_mC2V - alpha_atanh_approx) * (alpha_atanh_approx + tanh_mC2V))
+            np.seterr(**orig_err)
+            np.add.at(llr175, CVidx_all, mC2V_curr - mC2V_prev)
+            llr175[0]=0
+            llr175 = np.clip(llr175, -7, 7)
+            mC2V_prev = mC2V_curr
+            bits = llr175[CVidx_all] > 0
+            parity = np.sum(bits, axis=1) & 1
+            ncheck = int(np.sum(parity))
+            if(ncheck == 0):
+                bits91_int = 0
+                for bit in (llr175[1:92] > 0).astype(int).tolist():
+                    bits91_int = (bits91_int << 1) | bit
+                msg_tuple, bits77_int = crc_unpack91(bits91_int)
+                return msg_tuple, f"LDPC{['','_CQ'][i]}_{ldpc_it}_its"
+    return None, ''
 
 #============== AUDIO ========================================================
 class AudioIn:
     def __init__(self, input_device_keywords, max_freq):
-        self.fft_len = int(BPT * SAMP_RATE // SYM_RATE)
-        fft_out_len = self.fft_len // 2 + 1
+        fft_len = int(BPT * SAMP_RATE // SYM_RATE)
+        fft_out_len = fft_len // 2 + 1
         self.nFreqs = int(fft_out_len * 2 * max_freq / SAMP_RATE)
-        self.audio_buffer = np.zeros(self.fft_len, dtype=np.float32)
-        self.fft_in = np.zeros(self.fft_len, dtype=np.float32)
-        self.fft_window = fft_window=np.hanning(self.fft_len).astype(np.float32)
-        self.hops_per_cycle = int(15 * SYM_RATE * HPS)
-        self.grid_main = np.ones((self.hops_per_cycle, self.nFreqs), dtype = np.float32)
+        self.audio_buffer = np.zeros(fft_len, dtype=np.float32)
+        self.fft_in = np.zeros(fft_len, dtype=np.float32)
+        self.fft_window = fft_window=np.hanning(fft_len).astype(np.float32)
+        self.grid_main = np.ones((HPC, self.nFreqs), dtype = np.float32)
         indev = self.find_device(input_device_keywords)
         self.stream = pyaudio.PyAudio().open(
             format = pyaudio.paInt16, channels=1, rate = SAMP_RATE, input = True, input_device_index = indev,
@@ -252,7 +263,7 @@ class AudioIn:
         np.multiply(self.audio_buffer, self.fft_window, out=self.fft_in)
         z = np.fft.rfft(self.fft_in)[:self.nFreqs]
         self.grid_main[self.grid_main_ptr, :] = 10*np.log10(z.real*z.real + z.imag*z.imag)
-        self.grid_main_ptr = (self.grid_main_ptr + 1) % self.hops_per_cycle
+        self.grid_main_ptr = (self.grid_main_ptr + 1) % HPC
         return (None, pyaudio.paContinue)
 
 class Receiver:
@@ -261,7 +272,7 @@ class Receiver:
         self.output_type = output_type
         self.candidates = []
         self.duplicate_filter = []
-        self.last_decode = 0
+        self.last_decode_attempt = 0
         self.n_not_completed = 0
         self.cycle_searched = False
         self.sock_out = None
@@ -296,7 +307,8 @@ class Receiver:
                 self.send_output_type({'mtype':'rollover', 'info':info})
                 self.candidates = self.search(cycle_start_str)
                 self.duplicate_filter = []
-                print(f"Last decode {self.last_decode % 15}, {self.n_not_completed} not attempted")
+                if self.last_decode_attempt > 0:
+                    print(f"Last decode {self.last_decode_attempt % 15:6.1f}, {self.n_not_completed} not attempted")
             else:
                 self.decode()
             t_cyc_prev = t_cyc
@@ -340,19 +352,19 @@ class Receiver:
         for c in to_decode:
             if c['attempt'] == 0 and not self.signal_arriving(c, last_sym = 33):
                 p = self.audio_in.grid_main[c['p_idx']]
-                c['decode_result'], hcode = decode_raw91(p), 91
+                c['decode_result'], decode_info = decode_raw91(p)
             if c['attempt'] == 1 and not self.signal_arriving(c, last_sym = 57):
                 p = self.audio_in.grid_main[c['p_idx']]
-                c['decode_result'], hcode = decode_ldpc(p)
+                c['decode_result'], decode_info = decode_ldpc(p)
             c['attempt'] += 1
+            self.last_decode_attempt = time.time()
 
             if c['decode_result']:
-                self.last_decode = time.time()
                 if not c['decode_result'] in self.duplicate_filter:
                     their_snr = np.clip(int(np.max(p) - np.min(p)) - 58, -24, 24)
                     self.duplicate_filter.append(c['decode_result'])
                     self.send_output_type({'mtype':'decode', 'cyclestart_string': c['cs'], 't_decode':time.time(),
-                                      'fHz':f"{c['fHz']:7.2f}", 'dt':f"{c['dt']:+04.2f}", 'hcode':hcode,
+                                      'fHz':f"{c['fHz']:7.2f}", 'dt':f"{c['dt']:+04.2f}", 'decode_info':decode_info,
                                       'their_snr':f"{their_snr:+03d}", 'msg_tuple':c['decode_result']})
             
 

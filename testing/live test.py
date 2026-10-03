@@ -105,7 +105,7 @@ def monitor_decodes():
             py_times.append(float(m['t_decode']) - t_start)
             decode_count = len(py_times)
             diff = decode_count - baseline_decode_count
-            txt = f"{m['hcode']}, {m['msg_tuple']}"
+            txt = f"{m['decode_info']:20s} {m['msg_tuple']}"
             py_info  = f"{decode_count:03d}({diff:+03d}) {py_cycle[1]:03d} {py_times[-1]:7.2f} {txt}"
             with open(output_files[0], 'a') as f:
                 f.write(f"{py_info}\n")
