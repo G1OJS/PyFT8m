@@ -32,7 +32,7 @@ class SoundcardOut:
         global finished_audio
         import wave
         for i, w in enumerate(self.wav_files):
-            print(f"Start playing wav file {w}")
+            #print(f"Start playing wav file {w}")
             wv = wave.open(w, 'rb')
             audio_bytes = wv.readframes(sr*16)
             audio_bytes = audio_bytes[-int(sr*(15-0.6/4))*2:]
@@ -168,7 +168,7 @@ def do_test(input_device_keywords, wav_range = None):
     t = (wav_file_time_offset - time.time()) %15
     print(f"Waiting to play first wav file {t:6.2f}s")
     time.sleep(t)
-    t_start = time.time()
+    t_start = 15 * int(0.5 + time.time() / 15)
     soundout.start_wavs()
 
 wav_folder = "C:/Users/drala/Documents/Projects/GitHub/ft8_lib/test/wav/20m_busy"

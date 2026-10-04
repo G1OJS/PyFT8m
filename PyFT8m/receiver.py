@@ -6,7 +6,7 @@ SYM_RATE, SAMP_RATE = 6.25, 12000
 HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
 MIN_SCORE = 100
-MAX_CANDS = 350
+MAX_CANDS = 300
 MAX_LDPC = 10
 H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-2.5, 3.5]]
 
@@ -366,32 +366,6 @@ class Receiver:
         self.send_output({'mtype':'info', 'info':'Receiver starting'})
         threading.Thread(target = self.manage_cycle, daemon=True ).start()
 
-    def manage_cycle(self):
-        while time.time() % 15 > 0.5:
-            time.sleep(0.1)
-        t_cyc, t_cyc_prev = 0, 0
-        while True:
-            time.sleep(0.01)
-            t_cyc = time.time() % 15
-            if t_cyc < t_cyc_prev:
-                self.audio_in.check_pointer()
-                self.cycle_searched = False
-            if t_cyc > T_SEARCH_1 and not self.cycle_searched:
-                self.cycle_searched = True
-                t0_cyc = 15 * int(time.time() / 15)
-                cycle_start_str = time.strftime("%y%m%d_%H%M%S", time.gmtime(t0_cyc))
-                info = f"{cycle_start_str} ========================================"
-                self.send_output({'mtype':'rollover', 'info':info})
-                self.candidates = self.search(cycle_start_str)
-                self.duplicate_filter = []
-                info = f"Search finished at {time.time() % 15:6.1f} with {len(self.candidates)} candidates"
-                self.send_output({'mtype':'test_info', 'info':info})
-                pc_remaining, last_attempt = self.decode()
-                if last_attempt > 0:
-                    info = f"Last decode attempt {last_attempt % 15:6.1f}, {pc_remaining:5.1%} not attempted"
-                    self.send_output({'mtype':'test_info', 'info':info})
-            t_cyc_prev = t_cyc
-
     def send_output(self, msg_dict):
         if self.output_type == 'print':
             print(msg_dict)
@@ -400,6 +374,35 @@ class Receiver:
             self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock_out.connect(('localhost', 2121))
         self.sock_out.send(json.dumps(msg_dict).encode('utf-8'))
+
+    def manage_cycle(self):
+        while time.time() % 15 > 0.5:
+            time.sleep(0.1)
+        t_cyc, t_cyc_prev = 0, 0
+        while True:
+            time.sleep(0.1)
+            t_cyc = time.time() % 15
+            if t_cyc < t_cyc_prev:
+                self.audio_in.check_pointer()
+                self.cycle_searched = False
+            if t_cyc > T_SEARCH_1 and not self.cycle_searched:
+                self.cycle_searched = True
+                self.search_and_decode()
+            t_cyc_prev = t_cyc
+
+    def search_and_decode(self):
+        t0_cyc = 15 * int(time.time() / 15)
+        cycle_start_str = time.strftime("%y%m%d_%H%M%S", time.gmtime(t0_cyc))
+        info = f"{cycle_start_str} ========================================"
+        self.send_output({'mtype':'rollover', 'info':info})
+        self.candidates = self.search(cycle_start_str)
+        self.duplicate_filter = []
+        info = f"Search finished at {time.time() % 15:6.1f} with {len(self.candidates)} candidates"
+        self.send_output({'mtype':'test_info', 'info':info})
+        pc_remaining, last_attempt = self.decode()
+        if last_attempt > 0:
+            info = f"Last decode attempt {last_attempt % 15:6.1f}, {pc_remaining:5.1%} not attempted"
+            self.send_output({'mtype':'test_info', 'info':info})
 
     def search(self, cycle_start_str):
         candidates = []
@@ -441,14 +444,14 @@ class Receiver:
 
         for c in self.candidates:
             if time.time() % 15 < T_SEARCH_1 or self.cycle_searched:
+                n_remaining -= 1
                 if not c['decode_result']:
                     if signal_available(c, last_sym = 57):
                         p = self.audio_in.tfgrid[c['p_idx']]
                         c['decode_result'], c['decode_info'] = decode(p)
                         self.check_and_send(c)
-                        n_remaining -= 1
                         last_attempt = time.time()
-
+                
         pc_remaining = n_remaining / (len(self.candidates) + 0.01)       
         return pc_remaining, last_attempt
 
