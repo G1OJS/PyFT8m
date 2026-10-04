@@ -169,7 +169,7 @@ HPS, BPT = 4, 2
 SYM_RATE, SAMP_RATE = 6.25, 12000
 HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
-MIN_SCORE = 85
+MIN_SCORE = 95
 MAX_CANDS = 500
 MAX_LDPC = 16
 H0_RANGE = [int(SYM_RATE * HPS * t) for t in [0.5-2.5, 0.5+2.5+0.25]]
@@ -427,7 +427,7 @@ class Receiver:
         n4_good91, n4_ldpc, n4_osd = n_cands, n_cands, n_cands
 
         def stop_decoding():
-            return 5 < time.time() % 15 < T_SEARCH_1
+            return 9 < time.time() % 15 < T_SEARCH_1
 
         def wait_for_signal(cand, last_sym = 57):
             t = time.time()
