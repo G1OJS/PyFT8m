@@ -6,7 +6,7 @@ SYM_RATE, SAMP_RATE = 6.25, 12000
 HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
 MIN_SCORE = 100
-MAX_CANDS = 450
+MAX_CANDS = 350
 MAX_LDPC = 10
 H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-2.5, 3.5]]
 
@@ -306,12 +306,15 @@ class AudioIn:
         self.fft_window = fft_window=np.hanning(fft_len).astype(np.float32)
         self.tfgrid = np.ones((HPC, self.nFreqs), dtype = np.float32)
         indev = self.find_device(input_device_keywords)
-        self.stream = pyaudio.PyAudio().open(
-            format = pyaudio.paInt16, channels=1, rate = SAMP_RATE, input = True, input_device_index = indev,
-            frames_per_buffer = int(SAMP_RATE / (SYM_RATE * HPS)), stream_callback=self._callback,)
-        self.tfgrid_ptr = 0
-        self.check_pointer()
-        self.stream.start_stream()
+        if indev is None:
+            print("Couldn't find input device")
+        else:
+            self.stream = pyaudio.PyAudio().open(
+                format = pyaudio.paInt16, channels=1, rate = SAMP_RATE, input = True, input_device_index = indev,
+                frames_per_buffer = int(SAMP_RATE / (SYM_RATE * HPS)), stream_callback=self._callback,)
+            self.tfgrid_ptr = 0
+            self.check_pointer()
+            self.stream.start_stream()
 
     def find_device(self, device_str_contains):
         if isinstance(device_str_contains, str):
@@ -324,13 +327,11 @@ class AudioIn:
                 if (not pattern in name): match = False
             if(match):
                 return dev_idx
-        print(f"[Audio] No audio device found matching {device_str_contains}")
 
     def check_pointer(self):
         ptr = int((time.time() % 15) * SYM_RATE * HPS)
         if np.abs(self.tfgrid_ptr - ptr) > 3:
             self.tfgrid_ptr = ptr
-            print('set pointer')
 
     def _callback(self, in_data, frame_count, time_info, status_flags):
         samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
@@ -362,7 +363,7 @@ class Receiver:
             csync[sym_idx, fbins] = 1.0
             csync[sym_idx, 7 * BPT:] = 0.0
         self.csync_flat =  csync.ravel()
-        self.send_output_type({'mtype':'info', 'info':'Receiver starting'})
+        self.send_output({'mtype':'info', 'info':'Receiver starting'})
         threading.Thread(target = self.manage_cycle, daemon=True ).start()
 
     def manage_cycle(self):
@@ -377,22 +378,21 @@ class Receiver:
                 self.cycle_searched = False
             if t_cyc > T_SEARCH_1 and not self.cycle_searched:
                 self.cycle_searched = True
-                to_decode = [c for c in self.candidates if c['attempt'] < 2  and not c['decode_result']]
-                len_cands = len(self.candidates)
                 t0_cyc = 15 * int(time.time() / 15)
                 cycle_start_str = time.strftime("%y%m%d_%H%M%S", time.gmtime(t0_cyc))
                 info = f"{cycle_start_str} ========================================"
-                self.send_output_type({'mtype':'rollover', 'info':info})
+                self.send_output({'mtype':'rollover', 'info':info})
                 self.candidates = self.search(cycle_start_str)
                 self.duplicate_filter = []
-                if self.last_decode_attempt > 0:
-                    print(f"Last decode attempt {self.last_decode_attempt % 15:6.1f}, {len(to_decode)}/{len_cands} not attempted")
-                print(f"Search finished at {time.time() % 15:6.1f} with {len(self.candidates)} candidates")
-            else:
-                self.decode()
+                info = f"Search finished at {time.time() % 15:6.1f} with {len(self.candidates)} candidates"
+                self.send_output({'mtype':'test_info', 'info':info})
+                pc_remaining, last_attempt = self.decode()
+                if last_attempt > 0:
+                    info = f"Last decode attempt {last_attempt % 15:6.1f}, {pc_remaining:5.1%} not attempted"
+                    self.send_output({'mtype':'test_info', 'info':info})
             t_cyc_prev = t_cyc
 
-    def send_output_type(self, msg_dict):
+    def send_output(self, msg_dict):
         if self.output_type == 'print':
             print(msg_dict)
             return
@@ -417,7 +417,7 @@ class Receiver:
             if new_origin['score'] > MIN_SCORE:
                 hops, freq_idxs = new_origin['h0_idx'] + self.base_payload_hops, new_origin['f0_idx'] + self.base_freq_idxs
                 p_idx = np.ix_(hops, freq_idxs)
-                new_origin.update({'p_idx':p_idx, 'attempt':0, 'decode_result':None})
+                new_origin.update({'p_idx':p_idx, 'decode_info': None, 'decode_result':None})
                 candidates.append(new_origin)
         candidates.sort(key = lambda c: -c['score'])
         candidates = candidates[:MAX_CANDS]
@@ -425,28 +425,42 @@ class Receiver:
         return candidates
 
     def decode(self):
+        n_remaining = len(self.candidates)
+        last_attempt = 0
         def signal_available(cand, last_sym = 57):
             early = self.audio_in.tfgrid_ptr < cand['h0_idx']
             late = self.audio_in.tfgrid_ptr > cand['h0_idx'] + self.base_payload_hops[last_sym]
-            return late or early 
-        to_decode = [c for c in self.candidates if c['attempt'] < 2 and not c['decode_result']]
-        for c in to_decode:
-            if c['attempt'] == 0 and signal_available(c, last_sym = 32):
-                p = self.audio_in.tfgrid[c['p_idx']]
-                c['decode_result'], decode_info = decode_raw91(p)
-            if c['attempt'] == 1 and signal_available(c, last_sym = 57):
-                p = self.audio_in.tfgrid[c['p_idx']]
-                c['decode_result'], decode_info = decode(p)
-            c['attempt'] += 1
-            self.last_decode_attempt = time.time()
+            return late or early
+        
+        for c in self.candidates:
+            if not c['decode_result']:
+                if signal_available(c, last_sym = 32):
+                    p = self.audio_in.tfgrid[c['p_idx']]
+                    c['decode_result'], c['decode_info'] = decode_raw91(p)
+                    self.check_and_send(c)
 
-            if c['decode_result']:
-                if not c['decode_result'] in self.duplicate_filter:
-                    their_snr = np.clip(int(np.max(p) - np.min(p)) - 58, -24, 24)
-                    self.duplicate_filter.append(c['decode_result'])
-                    self.send_output_type({'mtype':'decode', 'cyclestart_string': c['cs'], 't_decode':time.time(),
-                                      'fHz':f"{c['fHz']:7.2f}", 'dt':f"{c['dt']:+04.2f}", 'decode_info':decode_info,
-                                      'their_snr':f"{their_snr:+03d}", 'msg_tuple':c['decode_result']})
+        for c in self.candidates:
+            if time.time() % 15 < T_SEARCH_1 or self.cycle_searched:
+                if not c['decode_result']:
+                    if signal_available(c, last_sym = 57):
+                        p = self.audio_in.tfgrid[c['p_idx']]
+                        c['decode_result'], c['decode_info'] = decode(p)
+                        self.check_and_send(c)
+                        n_remaining -= 1
+                        last_attempt = time.time()
+
+        pc_remaining = n_remaining / (len(self.candidates) + 0.01)       
+        return pc_remaining, last_attempt
+
+    def check_and_send(self, c):
+        if c['decode_result']:
+            if not c['decode_result'] in self.duplicate_filter:
+                p = self.audio_in.tfgrid[c['p_idx']]
+                their_snr = np.clip(int(np.max(p) - np.min(p)) - 58, -24, 24)
+                self.duplicate_filter.append(c['decode_result'])
+                self.send_output({'mtype':'decode', 'cyclestart_string': c['cs'], 't_decode':time.time(),
+                                  'fHz':f"{c['fHz']:7.2f}", 'dt':f"{c['dt']:+04.2f}", 'decode_info':c['decode_info'],
+                                  'their_snr':f"{their_snr:+03d}", 'msg_tuple':c['decode_result']})
             
 
 if __name__ == "__main__":
