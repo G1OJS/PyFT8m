@@ -172,7 +172,7 @@ T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
 MIN_SCORE = 100
 MAX_CANDS = 350
 MAX_LDPC = 15
-H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-2.5, 3.5]]
+H0_RANGE = [int(SYM_RATE * HPS * t) for t in [0.5-2.5, 0.5+2.5]]
 
 def bits_to_int(llr):
     bits_int = 0
@@ -398,25 +398,41 @@ class Receiver:
 
     def search(self, cycle_start_str):
         candidates = []
+        nimp = 0
         for f0_idx in range(int(100 / 3.125), self.audio_in.nFreqs - 8 * BPT, 1):
             time.sleep(0)
             freq_idxs = f0_idx + self.base_freq_idxs
             p = self.audio_in.tfgrid[:, f0_idx:f0_idx+8*BPT]
             new_origin = {'score':0}
             for h0_idx in range(H0_RANGE[0], H0_RANGE[1]):
-                sync_score = float(np.dot(p[h0_idx + self.hop_idxs_Costas + 36 * HPS, :].ravel(), self.csync_flat))
-                test_origin = {'f0_idx': f0_idx, 'h0_idx':h0_idx, 'cs':cycle_start_str, 'score':sync_score,
-                               'fHz': 3.125 * f0_idx, 'dt': h0_idx / (SYM_RATE * HPS) - 0.7}
+                sync_score = np.dot(p[h0_idx + self.hop_idxs_Costas + 36 * HPS, :].ravel(), self.csync_flat)
+                test_origin = {'h0_idx':h0_idx, 'score':sync_score}
                 if test_origin['score'] > new_origin['score']:
                     new_origin = test_origin
+            for h0_idx in range(new_origin['h0_idx']-5, new_origin['h0_idx']-5):
+                sync_score = np.dot(p[h0_idx + self.hop_idxs_Costas, :].ravel(), self.csync_flat)
+                test_origin = {'h0_idx':h0_idx, 'score':sync_score}
+                if test_origin['score'] > new_origin['score']:
+                    nimp += 1
+                    new_origin = test_origin            
+            for h0_idx in range(new_origin['h0_idx']-5, new_origin['h0_idx']-5):
+                sync_score = np.dot(p[h0_idx + self.hop_idxs_Costas + 72 * HPS, :].ravel(), self.csync_flat)
+                test_origin = {'h0_idx':h0_idx, 'score':sync_score}
+                if test_origin['score'] > new_origin['score']:
+                    nimp += 1
+                    new_origin = test_origin
             if new_origin['score'] > MIN_SCORE:
-                hops, freq_idxs = new_origin['h0_idx'] + self.base_payload_hops, new_origin['f0_idx'] + self.base_freq_idxs
+                hops, freq_idxs = new_origin['h0_idx'] + self.base_payload_hops, f0_idx + self.base_freq_idxs
                 p_idx = np.ix_(hops, freq_idxs)
-                new_origin.update({'p_idx':p_idx, 'decode_info': None, 'decode_result':None, 'llr_saved':None})
+                dt = new_origin['h0_idx'] / (SYM_RATE * HPS) - 0.7
+                fHz = 3.125 * f0_idx
+                new_origin.update({'f0_idx': f0_idx, 'cs':cycle_start_str, 'p_idx':p_idx, 'fHz': fHz, 'dt': dt,
+                                   'decode_info': None, 'decode_result':None, 'llr_saved':None})
                 candidates.append(new_origin)
         candidates.sort(key = lambda c: -c['score'])
         candidates = candidates[:MAX_CANDS]
         candidates.sort(key = lambda c: int(c['h0_idx']))
+        print(nimp)
         return candidates
 
     def decode(self):
