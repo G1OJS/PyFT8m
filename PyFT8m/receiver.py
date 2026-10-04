@@ -172,7 +172,7 @@ T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
 MIN_SCORE = 100
 MAX_CANDS = 350
 MAX_LDPC = 15
-H0_RANGE = [int(SYM_RATE * HPS * t) for t in [0.5-2.5, 0.5+2.5]]
+H0_RANGE = [int(SYM_RATE * HPS * t) for t in [0.5-2.5, 0.5+2.5+0.25]]
 
 def bits_to_int(llr):
     bits_int = 0
@@ -337,7 +337,7 @@ class AudioIn:
         return (None, pyaudio.paContinue)
 
 class Receiver:
-    def __init__(self, mic_keywords = ['Mic', 'CODEC'], max_freq = 3100, output_type = 'udp'):
+    def __init__(self, mic_keywords = ['Mic', 'CODEC'], max_freq = 2900, output_type = 'udp'):
         self.audio_in = AudioIn(mic_keywords, max_freq)
         self.output_type = output_type
         self.candidates = []
@@ -398,7 +398,6 @@ class Receiver:
 
     def search(self, cycle_start_str):
         candidates = []
-        nimp = 0
         for f0_idx in range(int(100 / 3.125), self.audio_in.nFreqs - 8 * BPT, 1):
             time.sleep(0)
             freq_idxs = f0_idx + self.base_freq_idxs
@@ -409,20 +408,9 @@ class Receiver:
                 test_origin = {'h0_idx':h0_idx, 'score':sync_score}
                 if test_origin['score'] > new_origin['score']:
                     new_origin = test_origin
-            for h0_idx in range(new_origin['h0_idx']-5, new_origin['h0_idx']-5):
-                sync_score = np.dot(p[h0_idx + self.hop_idxs_Costas, :].ravel(), self.csync_flat)
-                test_origin = {'h0_idx':h0_idx, 'score':sync_score}
-                if test_origin['score'] > new_origin['score']:
-                    nimp += 1
-                    new_origin = test_origin            
-            for h0_idx in range(new_origin['h0_idx']-5, new_origin['h0_idx']-5):
-                sync_score = np.dot(p[h0_idx + self.hop_idxs_Costas + 72 * HPS, :].ravel(), self.csync_flat)
-                test_origin = {'h0_idx':h0_idx, 'score':sync_score}
-                if test_origin['score'] > new_origin['score']:
-                    nimp += 1
-                    new_origin = test_origin
             if new_origin['score'] > MIN_SCORE:
-                hops, freq_idxs = new_origin['h0_idx'] + self.base_payload_hops, f0_idx + self.base_freq_idxs
+                freq_idxs = f0_idx + self.base_freq_idxs
+                hops = [(new_origin['h0_idx'] + h) % HPC for h in self.base_payload_hops]
                 p_idx = np.ix_(hops, freq_idxs)
                 dt = new_origin['h0_idx'] / (SYM_RATE * HPS) - 0.7
                 fHz = 3.125 * f0_idx
@@ -432,7 +420,6 @@ class Receiver:
         candidates.sort(key = lambda c: -c['score'])
         candidates = candidates[:MAX_CANDS]
         candidates.sort(key = lambda c: int(c['h0_idx']))
-        print(nimp)
         return candidates
 
     def decode(self):
