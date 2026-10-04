@@ -170,8 +170,8 @@ SYM_RATE, SAMP_RATE = 6.25, 12000
 HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
 MIN_SCORE = 85
-MAX_CANDS = 450
-MAX_LDPC = 15
+MAX_CANDS = 500
+MAX_LDPC = 16
 H0_RANGE = [int(SYM_RATE * HPS * t) for t in [0.5-2.5, 0.5+2.5+0.25]]
 
 def bits_to_int(llr):
@@ -192,8 +192,8 @@ def decode(p):
     llrc = np.max(p[:, [1,2,6,7]], axis=1) - np.max(p[:, [0,3,4,5]], axis=1)
     llr = np.column_stack((llra, llrb, llrc))
     llr = llr.ravel()
-    llr = 3.5 * llr / (np.std(llr) + 0.01)
-    llr = np.clip(llr, -3.7, 3.7)
+    llr = 2.38 * llr / (np.std(llr) + 0.01)
+    llr = np.clip(llr, -4, 4)
     llr175[1:] = llr
     alpha_atanh_approx = 1.18
     mC2V_prev[:, :] = 0
@@ -342,8 +342,6 @@ class Receiver:
         self.output_type = output_type
         self.candidates = []
         self.duplicate_filter = []
-        self.last_decode_attempt = 0
-        self.cycle_searched = False
         self.sock_out = None
         payload_symb_idxs = list(range(7, 36)) + list(range(43, 72))
         self.base_payload_hops = np.array([HPS * s for s in payload_symb_idxs])
@@ -368,6 +366,7 @@ class Receiver:
         self.sock_out.send(json.dumps(msg_dict).encode('utf-8'))
 
     def manage_cycle(self):
+        cycle_searched = False
         while time.time() % 15 > 0.5:
             time.sleep(0.1)
         t_cyc, t_cyc_prev = 0, 0
@@ -376,9 +375,9 @@ class Receiver:
             t_cyc = time.time() % 15
             if t_cyc < t_cyc_prev:
                 self.audio_in.check_pointer()
-                self.cycle_searched = False
-            if t_cyc > T_SEARCH_1 and not self.cycle_searched:
-                self.cycle_searched = True
+                cycle_searched = False
+            if t_cyc > T_SEARCH_1 and not cycle_searched:
+                cycle_searched = True
                 self.search_and_decode()
             t_cyc_prev = t_cyc
 
@@ -387,16 +386,14 @@ class Receiver:
         cycle_start_str = time.strftime("%y%m%d_%H%M%S", time.gmtime(t0_cyc))
         info = f"{cycle_start_str} ========================================"
         self.send_output({'mtype':'rollover', 'info':info})
-        self.candidates = self.search(cycle_start_str)
+        self.candidates = self.search(t0_cyc, cycle_start_str)
         self.duplicate_filter = []
         info = f"Search finished at {time.time() % 15:6.1f} with {len(self.candidates)} candidates"
         self.send_output({'mtype':'test_info', 'info':info})
-        last_attempt, n4_good91, n4_ldpc, n4_osd = self.decode()
-        if last_attempt > 0:
-            info = f"Last decode attempt {last_attempt % 15:6.1f}, remaining: g91:{n4_good91} ldpc:{n4_ldpc:}, osd:{n4_osd}"
-            self.send_output({'mtype':'test_info', 'info':info})
+        info = self.decode()
+        self.send_output({'mtype':'test_info', 'info':info})
 
-    def search(self, cycle_start_str):
+    def search(self, t0_cyc, cycle_start_str):
         candidates = []
         for f0_idx in range(int(100 / 3.125), self.audio_in.nFreqs - 8 * BPT, 1):
             time.sleep(0)
@@ -412,9 +409,11 @@ class Receiver:
                 freq_idxs = f0_idx + self.base_freq_idxs
                 hops = [(new_origin['h0_idx'] + h) % HPC for h in self.base_payload_hops]
                 p_idx = np.ix_(hops, freq_idxs)
-                dt = new_origin['h0_idx'] / (SYM_RATE * HPS) - 0.7
+                tsec = new_origin['h0_idx'] / (SYM_RATE * HPS)
+                dt = tsec - 0.5
                 fHz = 3.125 * f0_idx
-                new_origin.update({'f0_idx': f0_idx, 'cs':cycle_start_str, 'p_idx':p_idx, 'fHz': fHz, 'dt': dt,
+                abs_t0 = t0_cyc + tsec
+                new_origin.update({'f0_idx': f0_idx, 'cs':cycle_start_str, 'p_idx':p_idx, 'fHz': fHz, 'dt': dt, 'abs_t0':abs_t0, 
                                    'decode_info': None, 'decode_result':None, 'llr_saved':None})
                 candidates.append(new_origin)
         candidates.sort(key = lambda c: -c['score'])
@@ -424,28 +423,34 @@ class Receiver:
 
     def decode(self):
         n_cands = len(self.candidates)
-        n4_good91, n4_ldpc, n4_osd, last_attempt = n_cands, n_cands, n_cands, 0
-        
-        def signal_available(cand, last_sym = 57):
-            early = self.audio_in.tfgrid_ptr < cand['h0_idx']
-            late = self.audio_in.tfgrid_ptr > cand['h0_idx'] + self.base_payload_hops[last_sym]
-            return late or early
-        
+        last_attempt_start, last_attempt_stop = 0, 0
+        n4_good91, n4_ldpc, n4_osd = n_cands, n_cands, n_cands
+
+        def stop_decoding():
+            return 5 < time.time() % 15 < T_SEARCH_1
+
+        def wait_for_signal(cand, last_sym = 57):
+            t = time.time()
+            arriving = t < cand['abs_t0'] + self.base_payload_hops[last_sym] / (SYM_RATE * HPS)
+            overwritten = t > cand['abs_t0'] + 15 + 0.16*7
+            return arriving and not overwritten and not stop_decoding()
+
         for c in self.candidates:
-            while not signal_available(c, last_sym = 32):
-                time.sleep(0.05)
-            p = self.audio_in.tfgrid[c['p_idx']]
-            c['decode_result'], c['decode_info'] = decode_raw91(p)
-            n4_good91 -= 1
-            if c['decode_result']:
-                n4_ldpc -= 1
-                n4_osd -= 1
-            self.check_and_send(c)
-                    
+            if not stop_decoding():
+                while wait_for_signal(c, last_sym = 31):
+                    time.sleep(0.05)
+                p = self.audio_in.tfgrid[c['p_idx']]
+                c['decode_result'], c['decode_info'] = decode_raw91(p)
+                n4_good91 -= 1
+                if c['decode_result']:
+                    n4_ldpc -= 1
+                    n4_osd -= 1
+                self.check_and_send(c)
+     
         for c in self.candidates:
-            if time.time() % 15 < T_SEARCH_1 or self.cycle_searched:
+            if not stop_decoding():
                 if not c['decode_result']:
-                    while not signal_available(c, last_sym = 57): # and time.time() % 15 < 15
+                    while wait_for_signal(c, last_sym = 57):
                         time.sleep(0.05)
                     p = self.audio_in.tfgrid[c['p_idx']].copy()
                     c['decode_result'], c['decode_info'], c['llr_saved'] = decode(p)
@@ -453,20 +458,22 @@ class Receiver:
                     if c['decode_result']:
                         n4_osd -= 1 
                     self.check_and_send(c)
-                    last_attempt = time.time()
 
         self.candidates.sort(key = lambda c: -c['score'])
         for c in self.candidates:
-            if time.time() % 15 < T_SEARCH_1 or self.cycle_searched:
+            if not stop_decoding():
                 if not c['decode_result']:
                     if c['llr_saved'] is not None:
+                        last_attempt_start = time.time()
                         c['decode_result'], order = osd(c['llr_saved'])
                         c['decode_info'] = f"OSD_ord{order}"
                         n4_osd -= 1
                         self.check_and_send(c)
-                        last_attempt = time.time()
+                        last_attempt_stop = time.time()
 
-        return last_attempt, n4_good91, n4_ldpc, n4_osd
+        return (f"Last decode attempt {last_attempt_start % 15:6.1f} to {last_attempt_stop % 15:6.1f},"
+                 + f" remaining: g91:{n4_good91} ldpc:{n4_ldpc:}, osd:{n4_osd}")
+     
 
     def check_and_send(self, c):
         if c['decode_result']:
