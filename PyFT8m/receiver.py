@@ -187,7 +187,6 @@ import warnings
 warnings.filterwarnings("error")
 def decode(p):
     global llr175, mC2V_prev
-    alpha_atanh_approx = 1.18
     llra = np.max(p[:, [4,5,6,7]], axis=1) - np.max(p[:, [0,1,2,3]], axis=1)
     llrb = np.max(p[:, [2,3,4,7]], axis=1) - np.max(p[:, [0,1,5,6]], axis=1)
     llrc = np.max(p[:, [1,2,6,7]], axis=1) - np.max(p[:, [0,3,4,5]], axis=1)
@@ -195,36 +194,33 @@ def decode(p):
     llr = llr.ravel()
     llr = 3.5 * llr / (np.std(llr) + 0.01)
     llr = np.clip(llr, -3.7, 3.7)
-    for i in range(1):
-        if i == 1:
-            llr[:29] = -5
-            llr[26] = 5
-        llr175[1:] = llr
-        mC2V_prev[:, :] = 0
-        llr_saved = None
-        for ldpc_it in range(MAX_LDPC):
-            mV2C = llr175[CVidx_all] - mC2V_prev
-            tanh_mV2C = np.tanh(-mV2C)
-            tanh_mC2V = np.prod(tanh_mV2C, axis=1, keepdims=True)
-            tanh_mC2V[24:,:6] = np.prod(tanh_mV2C[24:,:6], axis=1, keepdims=True)
-            orig_err = np.geterr()
-            np.seterr(all = 'ignore')
-            tanh_mC2V = np.divide(tanh_mC2V, tanh_mV2C)
-            mC2V_curr  = tanh_mC2V / ((tanh_mC2V - alpha_atanh_approx) * (alpha_atanh_approx + tanh_mC2V))
-            np.seterr(**orig_err)
-            np.add.at(llr175, CVidx_all, mC2V_curr - mC2V_prev)
-            llr175[0]=0
-            llr175 = np.clip(llr175, -7, 7)
-            mC2V_prev = mC2V_curr
-            bits = llr175[CVidx_all] > 0
-            parity = np.sum(bits, axis=1) & 1
-            ncheck = int(np.sum(parity))
-            if(ncheck == 0):
-                bits91_int = bits_to_int(llr175[1:92])
-                msg_tuple, bits77_int = crc_unpack91(bits91_int)
-                return msg_tuple, f"LDPC{['','_CQ'][i]}_{ldpc_it}_its", llr_saved
-            if ldpc_it == 0:
-                llr_saved = llr175[1:]
+    llr175[1:] = llr
+    alpha_atanh_approx = 1.18
+    mC2V_prev[:, :] = 0
+    llr_saved = None
+    for ldpc_it in range(MAX_LDPC):
+        mV2C = llr175[CVidx_all] - mC2V_prev
+        tanh_mV2C = np.tanh(-mV2C)
+        tanh_mC2V = np.prod(tanh_mV2C, axis=1, keepdims=True)
+        tanh_mC2V[24:,:6] = np.prod(tanh_mV2C[24:,:6], axis=1, keepdims=True)
+        orig_err = np.geterr()
+        np.seterr(all = 'ignore')
+        tanh_mC2V = np.divide(tanh_mC2V, tanh_mV2C)
+        mC2V_curr  = tanh_mC2V / ((tanh_mC2V - alpha_atanh_approx) * (alpha_atanh_approx + tanh_mC2V))
+        np.seterr(**orig_err)
+        np.add.at(llr175, CVidx_all, mC2V_curr - mC2V_prev)
+        llr175[0]=0
+        llr175 = np.clip(llr175, -7, 7)
+        mC2V_prev = mC2V_curr
+        bits = llr175[CVidx_all] > 0
+        parity = np.sum(bits, axis=1) & 1
+        ncheck = int(np.sum(parity))
+        if(ncheck == 0):
+            bits91_int = bits_to_int(llr175[1:92])
+            msg_tuple, bits77_int = crc_unpack91(bits91_int)
+            return msg_tuple, f"LDPC_{ldpc_it}_its", llr_saved
+        if ldpc_it == 1:
+            llr_saved = llr175[1:]
     return None, '', llr_saved
 
 #============== OSD ===========================================================
@@ -273,21 +269,17 @@ def osd(llr):
     current_best_distance = 1e20
     cw_out91 = None
     for i in range(91):
-        # Single flip
-        cw = base_cw ^ G[fliplist[i]]
-        # Double flips with every j < i
-        if i:
+        cw = base_cw ^ G[fliplist[i]] # Single flip
+        if i: # Double flips with every j < i
             cw2 = base_cw ^ G[fliplist[i]] ^ G[fliplist[:i]]
             candidates = np.vstack((cw, cw2))
         else:
             candidates = cw[None, :]
-
         distances = np.sum(np.abs(llr)[None, :] * (candidates != chbits174), axis=1)
         best_idx = np.argmin(distances)
         if distances[best_idx] < current_best_distance:
             current_best_distance = distances[best_idx]
             cw_out91 = candidates[best_idx, :91].copy()
-
         if cw_out91 is not None:
             bits91_int = bits_to_int(cw_out91)
             msg_tuple, bits77_int = crc_unpack91(bits91_int)
@@ -442,7 +434,7 @@ class Receiver:
             p = self.audio_in.tfgrid[c['p_idx']]
             c['decode_result'], c['decode_info'] = decode_raw91(p)
             n_good91 += 1
-            n_ldpc += (1 if c['decode_result'] else 0)
+            n_ldpc += (1 if c['decode_result'] else 0) # (so 100% ldpc = 100% of required ldpc)
             self.check_and_send(c)
                     
         for c in self.candidates:
@@ -453,7 +445,7 @@ class Receiver:
                     p = self.audio_in.tfgrid[c['p_idx']].copy()
                     c['decode_result'], c['decode_info'], c['llr_saved'] = decode(p)
                     n_ldpc += 1
-                    n_osd += (1 if c['decode_result'] else 0)
+                    n_osd += (1 if c['decode_result'] else 0) # (so 100% osd = 100% of required osd)
                     self.check_and_send(c)
                     last_attempt = time.time()
 
