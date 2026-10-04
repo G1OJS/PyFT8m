@@ -170,7 +170,7 @@ SYM_RATE, SAMP_RATE = 6.25, 12000
 HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
 MIN_SCORE = 100
-MAX_CANDS = 250
+MAX_CANDS = 350
 MAX_LDPC = 15
 H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-2.5, 3.5]]
 
@@ -375,7 +375,7 @@ class Receiver:
             time.sleep(0.1)
             t_cyc = time.time() % 15
             if t_cyc < t_cyc_prev:
-                #self.audio_in.check_pointer()
+                self.audio_in.check_pointer()
                 self.cycle_searched = False
             if t_cyc > T_SEARCH_1 and not self.cycle_searched:
                 self.cycle_searched = True
@@ -391,9 +391,9 @@ class Receiver:
         self.duplicate_filter = []
         info = f"Search finished at {time.time() % 15:6.1f} with {len(self.candidates)} candidates"
         self.send_output({'mtype':'test_info', 'info':info})
-        last_attempt, n_good91, n_ldpc, n_osd = self.decode()
+        last_attempt, n4_good91, n4_ldpc, n4_osd = self.decode()
         if last_attempt > 0:
-            info = f"Last decode attempt {last_attempt % 15:6.1f}, g91:{n_good91:6.1%} ldpc:{n_ldpc:6.1%}, osd:{n_osd:6.1%}, "
+            info = f"Last decode attempt {last_attempt % 15:6.1f}, remaining: g91:{n4_good91} ldpc:{n4_ldpc:}, osd:{n4_osd}"
             self.send_output({'mtype':'test_info', 'info':info})
 
     def search(self, cycle_start_str):
@@ -421,7 +421,7 @@ class Receiver:
 
     def decode(self):
         n_cands = len(self.candidates)
-        n_good91, n_ldpc, n_osd, last_attempt = 0, 0, 0, 0
+        n4_good91, n4_ldpc, n4_osd, last_attempt = n_cands, n_cands, n_cands, 0
         
         def signal_available(cand, last_sym = 57):
             early = self.audio_in.tfgrid_ptr < cand['h0_idx']
@@ -433,8 +433,10 @@ class Receiver:
                 time.sleep(0.05)
             p = self.audio_in.tfgrid[c['p_idx']]
             c['decode_result'], c['decode_info'] = decode_raw91(p)
-            n_good91 += 1
-            n_ldpc += (1 if c['decode_result'] else 0) # (so 100% ldpc = 100% of required ldpc)
+            n4_good91 -= 1
+            if c['decode_result']:
+                n4_ldpc -= 1
+                n4_osd -= 1
             self.check_and_send(c)
                     
         for c in self.candidates:
@@ -444,8 +446,9 @@ class Receiver:
                         time.sleep(0.05)
                     p = self.audio_in.tfgrid[c['p_idx']].copy()
                     c['decode_result'], c['decode_info'], c['llr_saved'] = decode(p)
-                    n_ldpc += 1
-                    n_osd += (1 if c['decode_result'] else 0) # (so 100% osd = 100% of required osd)
+                    n4_ldpc -= 1
+                    if c['decode_result']:
+                        n4_osd -= 1 
                     self.check_and_send(c)
                     last_attempt = time.time()
 
@@ -455,14 +458,11 @@ class Receiver:
                     if c['llr_saved'] is not None:
                         c['decode_result'], order = osd(c['llr_saved'])
                         c['decode_info'] = f"OSD_ord{order}"
-                        n_osd += 1
+                        n4_osd -= 1
                         self.check_and_send(c)
                         last_attempt = time.time()
 
-        if n_cands:
-            n_good91, n_ldpc, n_osd = n_good91/n_cands, n_ldpc/n_cands, n_osd/n_cands
-                                      
-        return last_attempt, n_good91, n_ldpc, n_osd
+        return last_attempt, n4_good91, n4_ldpc, n4_osd
 
     def check_and_send(self, c):
         if c['decode_result']:
