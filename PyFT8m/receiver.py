@@ -169,8 +169,8 @@ HPS, BPT = 4, 2
 SYM_RATE, SAMP_RATE = 6.25, 12000
 HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
-MIN_SCORE = 100
-MAX_CANDS = 350
+MIN_SCORE = 85
+MAX_CANDS = 450
 MAX_LDPC = 15
 H0_RANGE = [int(SYM_RATE * HPS * t) for t in [0.5-2.5, 0.5+2.5+0.25]]
 
@@ -455,6 +455,7 @@ class Receiver:
                     self.check_and_send(c)
                     last_attempt = time.time()
 
+        self.candidates.sort(key = lambda c: -c['score'])
         for c in self.candidates:
             if time.time() % 15 < T_SEARCH_1 or self.cycle_searched:
                 if not c['decode_result']:
