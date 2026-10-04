@@ -6,8 +6,8 @@ SYM_RATE, SAMP_RATE = 6.25, 12000
 HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
 MIN_SCORE = 100
-MAX_CANDS = 300
-MAX_LDPC = 10
+MAX_CANDS = 250
+MAX_LDPC = 5
 H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-2.5, 3.5]]
 
 call_hashes = {}
@@ -221,9 +221,9 @@ def decode(p):
                 bits91_int = bits_to_int(llr175[1:92])
                 msg_tuple, bits77_int = crc_unpack91(bits91_int)
                 return msg_tuple, f"LDPC{['','_CQ'][i]}_{ldpc_it}_its"
-      #  msg_tuple, order = osd(llr)
-      #  if msg_tuple:
-      #      return msg_tuple, f"OSD{['','_CQ'][i]}_ord{order}"
+        msg_tuple, order = osd(llr)
+        if msg_tuple:
+            return msg_tuple, f"OSD{['','_CQ'][i]}_ord{order}"
     return None, ''
 
 #============== OSD ===========================================================
@@ -268,6 +268,7 @@ def osd(llr):
     if msg_tuple:
         return msg_tuple, 0
 
+    """
     fliplist = rowperm[::-1]
     current_best_distance = 1e20
     cw_out91 = None
@@ -292,7 +293,7 @@ def osd(llr):
             msg_tuple, bits77_int = crc_unpack91(bits91_int)
             if msg_tuple:
                 return msg_tuple, 2
-            
+    """
     return None, None
 
 #============== AUDIO ========================================================
@@ -383,7 +384,7 @@ class Receiver:
             time.sleep(0.1)
             t_cyc = time.time() % 15
             if t_cyc < t_cyc_prev:
-                self.audio_in.check_pointer()
+                #self.audio_in.check_pointer()
                 self.cycle_searched = False
             if t_cyc > T_SEARCH_1 and not self.cycle_searched:
                 self.cycle_searched = True
@@ -444,14 +445,15 @@ class Receiver:
 
         for c in self.candidates:
             if time.time() % 15 < T_SEARCH_1 or self.cycle_searched:
-                n_remaining -= 1
-                if not c['decode_result']:
-                    if signal_available(c, last_sym = 57):
-                        p = self.audio_in.tfgrid[c['p_idx']]
+                if signal_available(c, last_sym = 57):
+                    n_remaining -= 1
+                    if not c['decode_result']:
+                        p = self.audio_in.tfgrid[c['p_idx']].copy()
                         c['decode_result'], c['decode_info'] = decode(p)
                         self.check_and_send(c)
                         last_attempt = time.time()
-                
+                    
+                    
         pc_remaining = n_remaining / (len(self.candidates) + 0.01)       
         return pc_remaining, last_attempt
 
