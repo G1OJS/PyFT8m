@@ -501,7 +501,7 @@ class Receiver:
                     if c['ch_llr_saved1'] is not None:
                         last_attempt_start = time.time()
                         c['decode_result'], order = osd(c['ch_llr_saved1'])
-                        c['decode_info'] = f"OSD_ch1_ord{order}"
+                        c['decode_info'] = f"OSDch_ord{order}"
                         if c['decode_result']:
                             n_remaining -= 1
                         self.check_and_send(c)
@@ -512,8 +512,7 @@ class Receiver:
                     if c['ch_llr_saved2'] is not None:
                         last_attempt_start = time.time()
                         c['decode_result'], order = osd(c['ch_llr_saved2'])
-                        c['decode_info'] = f"OSD_ch2_ord{order}"
-                        c['decode_info'] += 'B'
+                        c['decode_info'] = f"OSDch_ord{order}B"
                         n_remaining -= 1
                         self.check_and_send(c)
                         last_attempt_stop = time.time()
@@ -526,7 +525,7 @@ class Receiver:
                     if c['llr_saved1'] is not None:
                         last_attempt_start = time.time()
                         c['decode_result'], order = osd(c['llr_saved1'])
-                        c['decode_info'] = f"OSD_ldpc1_ord{order}"
+                        c['decode_info'] = f"OSDldpc_ord{order}"
                         if c['decode_result']:
                             n_remaining -= 1
                         self.check_and_send(c)
@@ -537,8 +536,7 @@ class Receiver:
                     if c['llr_saved2'] is not None:
                         last_attempt_start = time.time()
                         c['decode_result'], order = osd(c['llr_saved2'])
-                        c['decode_info'] = f"OSD_ldpc2_ord{order}"
-                        c['decode_info'] += 'B'
+                        c['decode_info'] = f"OSDldpc_ord{order}B"
                         n_remaining -= 1
                         self.check_and_send(c)
                         last_attempt_stop = time.time()
