@@ -87,12 +87,11 @@ class App:
             reply = determine_reply(rx_message, their_snr)
             self.send_udp({'mtype':'transmit', 'message':reply})
 
-
+app = App(tk.Tk())
 if True:
     from receiver import Receiver
     from transmitter import Transmitter
     rx = Receiver()
     tx = Transmitter()
-    
-app = App(tk.Tk())
+
 app.root.mainloop()

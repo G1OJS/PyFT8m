@@ -169,10 +169,10 @@ HPS, BPT = 4, 2
 SYM_RATE, SAMP_RATE = 6.25, 12000
 HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
-MIN_SCORE = 95
+MIN_SCORE = 0.5
 MAX_CANDS = 500
-MAX_LDPC = 16
-H0_RANGE = [int(SYM_RATE * HPS * t) for t in [0.5-2.5, 0.5+2.5+0.25]]
+MAX_LDPC = 26
+H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-1.5, 3.5]]
 
 def bits_to_int(llr):
     bits_int = 0
@@ -186,31 +186,38 @@ mC2V_prev = np.zeros(CVidx_all.shape, dtype=np.float32)
 import warnings
 warnings.filterwarnings("error")
 def decode(p):
+    def atanh(x):
+        a = 1.03
+        y = -x / ((x-a)*(x+a))
+        y[(x > a * 0.93)] = 7
+        y[(x < -a * 0.93)] = -7
+        return y
     global llr175, mC2V_prev
     llra = np.max(p[:, [4,5,6,7]], axis=1) - np.max(p[:, [0,1,2,3]], axis=1)
     llrb = np.max(p[:, [2,3,4,7]], axis=1) - np.max(p[:, [0,1,5,6]], axis=1)
     llrc = np.max(p[:, [1,2,6,7]], axis=1) - np.max(p[:, [0,3,4,5]], axis=1)
     llr = np.column_stack((llra, llrb, llrc))
     llr = llr.ravel()
-    llr = 2.38 * llr / (np.std(llr) + 0.01)
-    llr = np.clip(llr, -4, 4)
+    llr = 2.55 * llr / (np.std(llr) + 1e-12)
     llr175[1:] = llr
-    alpha_atanh_approx = 1.18
+    llr_clip = 7
+    llr175 = np.clip(llr175, -llr_clip, llr_clip)
     mC2V_prev[:, :] = 0
+    ch_llr_saved = llr175[1:]
     llr_saved = None
     for ldpc_it in range(MAX_LDPC):
         mV2C = llr175[CVidx_all] - mC2V_prev
-        tanh_mV2C = np.tanh(-mV2C)
+        tanh_mV2C = np.tanh(-mV2C / 2)
         tanh_mC2V = np.prod(tanh_mV2C, axis=1, keepdims=True)
         tanh_mC2V[24:,:6] = np.prod(tanh_mV2C[24:,:6], axis=1, keepdims=True)
         orig_err = np.geterr()
         np.seterr(all = 'ignore')
         tanh_mC2V = np.divide(tanh_mC2V, tanh_mV2C)
-        mC2V_curr  = tanh_mC2V / ((tanh_mC2V - alpha_atanh_approx) * (alpha_atanh_approx + tanh_mC2V))
+        mC2V_curr = 2 * atanh(-tanh_mC2V)
         np.seterr(**orig_err)
         np.add.at(llr175, CVidx_all, mC2V_curr - mC2V_prev)
         llr175[0]=0
-        llr175 = np.clip(llr175, -7, 7)
+        llr175 = np.clip(llr175, -llr_clip, llr_clip)
         mC2V_prev = mC2V_curr
         bits = llr175[CVidx_all] > 0
         parity = np.sum(bits, axis=1) & 1
@@ -218,10 +225,10 @@ def decode(p):
         if(ncheck == 0):
             bits91_int = bits_to_int(llr175[1:92])
             msg_tuple, bits77_int = crc_unpack91(bits91_int)
-            return msg_tuple, f"LDPC_{ldpc_it}_its", llr_saved
-        if ldpc_it == 1:
+            return msg_tuple, f"LDPC_{ldpc_it+1}_its", llr_saved, ch_llr_saved
+        if ldpc_it == 5:
             llr_saved = llr175[1:]
-    return None, '', llr_saved
+    return None, '', llr_saved, ch_llr_saved
 
 #============== OSD ===========================================================
 generator_matrix_rows = ["8329ce11bf31eaf509f27fc",  "761c264e25c259335493132",  "dc265902fb277c6410a1bdc",  "1b3f417858cd2dd33ec7f62",  "09fda4fee04195fd034783a",  "077cccc11b8873ed5c3d48a",  "29b62afe3ca036f4fe1a9da",  "6054faf5f35d96d3b0c8c3e",  "e20798e4310eed27884ae90",  "775c9c08e80e26ddae56318",  "b0b811028c2bf997213487c",  "18a0c9231fc60adf5c5ea32",  "76471e8302a0721e01b12b8",  "ffbccb80ca8341fafb47b2e",  "66a72a158f9325a2bf67170",  "c4243689fe85b1c51363a18",  "0dff739414d1a1b34b1c270",  "15b48830636c8b99894972e",  "29a89c0d3de81d665489b0e",  "4f126f37fa51cbe61bd6b94",  "99c47239d0d97d3c84e0940",  "1919b75119765621bb4f1e8",  "09db12d731faee0b86df6b8",  "488fc33df43fbdeea4eafb4",  "827423ee40b675f756eb5fe",  "abe197c484cb74757144a9a",  "2b500e4bc0ec5a6d2bdbdd0",  "c474aa53d70218761669360",  "8eba1a13db3390bd6718cec",  "753844673a27782cc42012e",  "06ff83a145c37035a5c1268",  "3b37417858cc2dd33ec3f62",  "9a4a5a28ee17ca9c324842c",  "bc29f465309c977e89610a4",  "2663ae6ddf8b5ce2bb29488",  "46f231efe457034c1814418",  "3fb2ce85abe9b0c72e06fbe",  "de87481f282c153971a0a2e",  "fcd7ccf23c69fa99bba1412",  "f0261447e9490ca8e474cec",  "4410115818196f95cdd7012",  "088fc31df4bfbde2a4eafb4",  "b8fef1b6307729fb0a078c0",  "5afea7acccb77bbc9d99a90",  "49a7016ac653f65ecdc9076",  "1944d085be4e7da8d6cc7d0",  "251f62adc4032f0ee714002",  "56471f8702a0721e00b12b8",  "2b8e4923f2dd51e2d537fa0",  "6b550a40a66f4755de95c26",  "a18ad28d4e27fe92a4f6c84",  "10c2e586388cb82a3d80758",  "ef34a41817ee02133db2eb0",  "7e9c0c54325a9c15836e000",  "3693e572d1fde4cdf079e86",  "bfb2cec5abe1b0c72e07fbe",  "7ee18230c583cccc57d4b08",  "a066cb2fedafc9f52664126",  "bb23725abc47cc5f4cc4cd2",  "ded9dba3bee40c59b5609b4",  "d9a7016ac653e6decdc9036",  "9ad46aed5f707f280ab5fc4",  "e5921c77822587316d7d3c2",  "4f14da8242a8b86dca73352",  "8b8b507ad467d4441df770e",  "22831c9cf1169467ad04b68",  "213b838fe2ae54c38ee7180",  "5d926b6dd71f085181a4e12",  "66ab79d4b29ee6e69509e56",  "958148682d748a38dd68baa",  "b8ce020cf069c32a723ab14",  "f4331d6d461607e95752746",  "6da23ba424b9596133cf9c8",  "a636bcbc7b30c5fbeae67fe",  "5cb0d86a07df654a9089a20",  "f11f106848780fc9ecdd80a",  "1fbb5364fb8d2c9d730d5ba",  "fcb86bc70a50c9d02a5d034",  "a534433029eac15f322e34c",  "c989d9c7c3d3b8c55d75130",  "7bb38b2f0186d46643ae962",  "2644ebadeb44b9467d1f42c",  "608cc857594bfbb55d69600"]
@@ -332,7 +339,7 @@ class AudioIn:
         self.audio_buffer[-ns:] = samples
         np.multiply(self.audio_buffer, self.fft_window, out=self.fft_in)
         z = np.fft.rfft(self.fft_in)[:self.nFreqs]
-        self.tfgrid[self.tfgrid_ptr, :] = 10*np.log10(z.real*z.real + z.imag*z.imag)
+        self.tfgrid[self.tfgrid_ptr, :] = 20*np.log10(np.abs(z))
         self.tfgrid_ptr = (self.tfgrid_ptr + 1) % HPC
         return (None, pyaudio.paContinue)
 
@@ -346,12 +353,10 @@ class Receiver:
         payload_symb_idxs = list(range(7, 36)) + list(range(43, 72))
         self.base_payload_hops = np.array([HPS * s for s in payload_symb_idxs])
         self.hop_idxs_Costas =  np.arange(7) * HPS
-        self.base_freq_idxs = np.array([BPT // 2 + BPT * t for t in range(8)])
-        csync = np.full((7, 8*BPT), -1/7, np.float32)
+        self.base_freq_idxs = np.array([BPT * t for t in range(8)])
+        csync = np.full((7, 8*BPT), -1/(8 * BPT - 1), np.float32)
         for sym_idx, tone in enumerate([3,1,4,0,6,5,2]):
-            fbins = range(tone * BPT, (tone+1) * BPT)
-            csync[sym_idx, fbins] = 1.0
-            csync[sym_idx, 7 * BPT:] = 0.0
+            csync[sym_idx, tone * BPT] =  1
         self.csync_flat =  csync.ravel()
         self.send_output({'mtype':'info', 'info':'Receiver starting'})
         threading.Thread(target = self.manage_cycle, daemon=True ).start()
@@ -401,7 +406,8 @@ class Receiver:
             p = self.audio_in.tfgrid[:, f0_idx:f0_idx+8*BPT]
             new_origin = {'score':0}
             for h0_idx in range(H0_RANGE[0], H0_RANGE[1]):
-                sync_score = np.dot(p[h0_idx + self.hop_idxs_Costas + 36 * HPS, :].ravel(), self.csync_flat)
+                vals = p[h0_idx + self.hop_idxs_Costas + 36 * HPS, :].ravel()
+                sync_score = np.dot(vals, self.csync_flat) / np.max(vals)
                 test_origin = {'h0_idx':h0_idx, 'score':sync_score}
                 if test_origin['score'] > new_origin['score']:
                     new_origin = test_origin
@@ -424,7 +430,7 @@ class Receiver:
     def decode(self):
         n_cands = len(self.candidates)
         last_attempt_start, last_attempt_stop = 0, 0
-        n4_good91, n4_ldpc, n4_osd = n_cands, n_cands, n_cands
+        n4_good91, n4_ldpc, n4_osd1, n4_osd2, = n_cands, n_cands, n_cands, n_cands
 
         def stop_decoding():
             return 9 < time.time() % 15 < T_SEARCH_1
@@ -444,7 +450,8 @@ class Receiver:
                 n4_good91 -= 1
                 if c['decode_result']:
                     n4_ldpc -= 1
-                    n4_osd -= 1
+                    n4_osd1 -= 1
+                    n4_osd2 -= 1
                 self.check_and_send(c)
      
         for c in self.candidates:
@@ -452,34 +459,48 @@ class Receiver:
                 if not c['decode_result']:
                     while wait_for_signal(c, last_sym = 57):
                         time.sleep(0.05)
-                    p = self.audio_in.tfgrid[c['p_idx']].copy()
-                    c['decode_result'], c['decode_info'], c['llr_saved'] = decode(p)
+                    p = self.audio_in.tfgrid[c['p_idx']]
+                    c['decode_result'], c['decode_info'], c['llr_saved'], c['ch_llr_saved'] = decode(p)
                     n4_ldpc -= 1
                     if c['decode_result']:
-                        n4_osd -= 1 
+                        n4_osd1 -= 1
+                        n4_osd2 -= 1
                     self.check_and_send(c)
 
         self.candidates.sort(key = lambda c: -c['score'])
         for c in self.candidates:
             if not stop_decoding():
                 if not c['decode_result']:
+                    if c['ch_llr_saved'] is not None:
+                        last_attempt_start = time.time()
+                        c['decode_result'], order = osd(c['ch_llr_saved'])
+                        c['decode_info'] = f"OSD_ch_ord{order}"
+                        n4_osd1 -= 1
+                        if c['decode_result']:
+                            n4_osd2 -= 1
+                        self.check_and_send(c)
+
+        for c in self.candidates:
+            if not stop_decoding():
+                if not c['decode_result']:
                     if c['llr_saved'] is not None:
                         last_attempt_start = time.time()
                         c['decode_result'], order = osd(c['llr_saved'])
-                        c['decode_info'] = f"OSD_ord{order}"
-                        n4_osd -= 1
+                        c['decode_info'] = f"OSD_ldpc_ord{order}"
+                        n4_osd2 -= 1
                         self.check_and_send(c)
                         last_attempt_stop = time.time()
 
         return (f"Last decode attempt {last_attempt_start % 15:6.1f} to {last_attempt_stop % 15:6.1f},"
-                 + f" remaining: g91:{n4_good91} ldpc:{n4_ldpc:}, osd:{n4_osd}")
+                 + f" remaining: g91:{n4_good91} ldpc:{n4_ldpc:}, osd1:{n4_osd1}, osd2:{n4_osd2}")
      
 
     def check_and_send(self, c):
         if c['decode_result']:
             if not c['decode_result'] in self.duplicate_filter:
                 p = self.audio_in.tfgrid[c['p_idx']]
-                their_snr = np.clip(int(np.max(p) - np.min(p)) - 58, -24, 24)
+                c['decode_info'] += f" {c['score']:5.2f}"
+                their_snr = np.clip(int(np.max(p)-np.min(p)) - 58, -24, 24)
                 self.duplicate_filter.append(c['decode_result'])
                 self.send_output({'mtype':'decode', 'cyclestart_string': c['cs'], 't_decode':time.time(),
                                   'fHz':f"{c['fHz']:7.2f}", 'dt':f"{c['dt']:+04.2f}", 'decode_info':c['decode_info'],
