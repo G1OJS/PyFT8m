@@ -225,7 +225,7 @@ def decode(p, i):
         if(ncheck == 0):
             bits91_int = bits_to_int(llr175[1:92])
             msg_tuple, bits77_int = crc_unpack91(bits91_int)
-            return msg_tuple, f"LDPC t={i} its={ldpc_it+1}", llr_saved, ch_llr_saved
+            return msg_tuple, f"LDPC   t={i} its={ldpc_it+1}", llr_saved, ch_llr_saved
         if ldpc_it == 5:
             llr_saved = llr175[1:]
     return None, '', llr_saved, ch_llr_saved
@@ -470,7 +470,7 @@ class Receiver:
                         c['decode_result'], c['decode_info'], llr_out, ch_llr = decode(p, itime)
                         c['saved_llrs'].append((f"ch t={itime}", ch_llr))
                         if llr_out is not None:
-                            c['saved_llrs'].append((f"ldpc   t={itime}", llr_out))
+                            c['saved_llrs'].append((f"op t={itime}", llr_out))
                         self.check_and_send(c)
 
         # osd on all saved llrs
