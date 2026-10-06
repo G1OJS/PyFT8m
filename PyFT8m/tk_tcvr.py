@@ -45,11 +45,12 @@ class App:
         self.text_widget = tk.Text(self.decodes_container, wrap=tk.WORD, yscrollcommand=self.scrollbar.set)
         self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.text_widget.tag_config('norm', foreground = 'white', background = 'blue', font=('Helvetica', 12))
-        self.text_widget.tag_config('info', foreground = 'black', background = 'white', font=('Helvetica', 12))
-        self.text_widget.tag_config('cq', foreground = 'white', background = 'green', font=('Helvetica', 12, 'bold'))
-        self.text_widget.tag_config('to_me', foreground = 'white', background = 'red', font=('Helvetica', 12, 'bold'))        
-        self.text_widget.tag_config('from_me', foreground = 'black', background = 'yellow', font=('Helvetica', 12, 'bold'))
+        fontsize = 10
+        self.text_widget.tag_config('norm', foreground = 'white', background = 'blue', font=('Helvetica', fontsize))
+        self.text_widget.tag_config('info', foreground = 'black', background = 'white', font=('Helvetica', fontsize))
+        self.text_widget.tag_config('cq', foreground = 'white', background = 'green', font=('Helvetica', fontsize, 'bold'))
+        self.text_widget.tag_config('to_me', foreground = 'white', background = 'red', font=('Helvetica', fontsize, 'bold'))        
+        self.text_widget.tag_config('from_me', foreground = 'black', background = 'yellow', font=('Helvetica', fontsize, 'bold'))
         self.text_widget.bind('<Button-1>', self.row_click)
 
         self.scrollbar.config(command=self.text_widget.yview)
