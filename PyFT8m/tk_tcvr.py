@@ -88,6 +88,7 @@ class App:
         elif msg_dict['mtype'] == 'rollover':
             display_type = 'info'
             display_text = msg_dict['info']
+            self.text_widget.delete(1.0, tk.END)
         elif msg_dict['mtype'] == 'waterfall':
             self.waterfall_new_vals = [100 - int(v) for v in msg_dict['data'].split(',')]
             display_text = ''
@@ -104,7 +105,6 @@ class App:
             xys = [(i*dw, v) for i,v in enumerate(self.waterfall_vals)]
             self.waterfall_canvas.coords(self.waterfall_line, xys)
         self.waterfall_canvas.after(100, self.update_waterfall)
-
 
     def row_click(self, e):
         curr = e.widget.index("current").split('.')[0]
