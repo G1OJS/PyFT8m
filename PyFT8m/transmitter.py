@@ -4,6 +4,7 @@ import wave, sys, pyaudio, time, threading, socket, json, psutil, subprocess
 SAMP_RATE = 12000
 SYM_RATE  = 6.25
 T_CYC = 15
+TX_T0 = 0.5
 MAX_TX_START_CYCLETIME = 3
 
 #==================== SOUNDCARD OUT ================================================================
@@ -259,7 +260,7 @@ class Transmitter:
 
     def _calc_delay(self):
         mtx = MAX_TX_START_CYCLETIME
-        ct = time.time() % 15
+        ct = (time.time() - TX_T0) % 15
         delay = -1
         if ct < mtx:
             delay =  0
@@ -276,14 +277,14 @@ class Transmitter:
                 rx_dict = json.loads(rx_bytes.decode('utf-8'))
                 if rx_dict['mtype'] == 'transmit':
                     message = rx_dict['message']
-                    print(message)
+                    print(f"Transmit message set to '{message}'")
                     if len(message.split(' ')) == 3:
                         symbols = get_ft8_symbols(message)
                         audio_bytes = symbols_to_audio_bytes(symbols, f_base = self.tx_freq)
                         delay = self._calc_delay()
                         if delay >= 0:
                             time.sleep(delay)
-                            print(f"{time.time() % 30} transmit")
+                            print(f"{time.time() % 60:5.1f} transmit")
                             self._hamlib_cmd(f"T 1")
                             self.soundcard_out.transmit_audio_data_bytes(audio_bytes)
                             self._hamlib_cmd(f"T 0")

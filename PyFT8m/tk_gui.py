@@ -4,6 +4,9 @@ import time, threading, socket, queue, json
 import numpy as np
 
 myCall, myGrid = "G1OJS", "IO90"
+PyFT8_UDP_SOCK = 2121
+
+
 their_snr = None
 in_qso_with = ''
 
@@ -28,7 +31,7 @@ class Gui:
     def __init__(self):
         self.call_hashes = {}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(('', 2121))
+        self.sock.bind(('', PyFT8_UDP_SOCK))
         self.sock_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.decode_queue = queue.Queue()
         self.root = tk.Tk()

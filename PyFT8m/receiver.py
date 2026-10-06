@@ -1,6 +1,22 @@
 import numpy as np
 import time, pyaudio, threading, queue, socket, json
 
+HPS, BPT = 4, 2
+TIME_WINDOW = [-1.5, 3.5]
+SYM_RATE, SAMP_RATE = 6.25, 12000
+MIN_SCORE = 0.5
+MAX_CANDS = 400
+MAX_LDPC = 25
+PyFT8_UDP_SOCK = 2121
+#------------------------------
+HPC = int(15 * SYM_RATE * HPS)
+T_SEARCH =  TIME_WINDOW[1]+(36+7)/SYM_RATE
+H0_RANGE = [int(SYM_RATE * HPS * t) for t in TIME_WINDOW]
+
+
+
+
+# =============== Call hashing ========================================
 call_hashes = {}
 def add_call_hash(call):
     global call_hashes
@@ -164,16 +180,6 @@ def decode_raw91(p, i):
             return msg_tuple, f"GOOD91 t={i} {['','CQ'][j]}"
     return None, None
 
-
-HPS, BPT = 4, 2
-SYM_RATE, SAMP_RATE = 6.25, 12000
-HPC = int(15 * SYM_RATE * HPS)
-T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
-MIN_SCORE = 0.5
-MAX_CANDS = 400
-MAX_LDPC = 25
-H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-1.5, 3.5]]
-
 def bits_to_int(llr):
     bits_int = 0
     for bit in (llr > 0).astype(int).tolist():
@@ -307,7 +313,7 @@ class AudioIn:
         self.nFreqs = int(fft_out_len * 2 * max_freq / SAMP_RATE)
         self.audio_buffer = np.zeros(fft_len + self.samples_per_half_hop, dtype=np.float32)
         self.fft_in = np.zeros(fft_len, dtype=np.float32)
-        self.fft_window = fft_window=np.hanning(fft_len).astype(np.float32)
+        self.fft_window = np.hanning(fft_len).astype(np.float32)
         self.tfgrid = np.ones((2, HPC, self.nFreqs), dtype = np.float32)
         indev = self.find_device(input_device_keywords)
         if indev is None:
@@ -381,7 +387,7 @@ class Receiver:
             return
         if self.sock_out is None:
             self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock_out.connect(('localhost', 2121))
+        self.sock_out.connect(('localhost', PyFT8_UDP_SOCK))
         self.sock_out.send(json.dumps(msg_dict).encode('utf-8'))
 
     def manage_cycle(self):
@@ -394,7 +400,7 @@ class Receiver:
             if t_cyc < t_cyc_prev:
                 self.audio_in.check_pointer()
                 cycle_searched = False
-            if t_cyc > T_SEARCH_1 and not cycle_searched:
+            if t_cyc > T_SEARCH and not cycle_searched:
                 cycle_searched = True
                 self.search_and_decode()
             t_cyc_prev = t_cyc
@@ -453,7 +459,7 @@ class Receiver:
         self.last_attempt_stop = 0
         
         def stop_decoding():
-            return 9 < time.time() % 15 < T_SEARCH_1
+            return 9 < time.time() % 15 < T_SEARCH
 
         def wait_for_signal(cand, last_sym = 57):
             t = time.time()
