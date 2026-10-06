@@ -24,15 +24,23 @@ def determine_reply(rx_message):
             in_qso_with = ''
     return reply
 
-class App:
-    def __init__(self, root):
+class Gui:
+    def __init__(self):
         self.call_hashes = {}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('', 2121))
         self.sock_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.decode_queue = queue.Queue()
-        self.root = root
+        self.root = tk.Tk()
         self.app_container = ttk.Frame(self.root)
+
+        self.sidebar_container = ttk.Frame(self.app_container, height = 500, width = 100)
+        self.sidebar_container.pack(side = 'left', fill = 'y')
+        self.buttons = []
+        bc = self.sidebar_container
+        self.buttons.append(tk.Button(bc, text = 'CQ', command = self.call_cq))
+        for btn in self.buttons:
+            btn.pack(side = 'top', anchor = 'n')
         
         self.waterfall_container = ttk.Frame(self.app_container, height = 100, width = 500)
         self.waterfall_canvas = tk.Canvas(self.waterfall_container, height = 100, width = 500, bg = 'pink')
@@ -56,7 +64,7 @@ class App:
         self.text_widget.bind('<Button-1>', self.row_click)
 
         self.scrollbar.config(command=self.text_widget.yview)
-
+        self.first_decode = False
         self.waterfall_container.pack(side = 'top')
         self.app_container.pack(side = 'top')
         self.decodes_container.pack(side = 'top')
@@ -66,6 +74,7 @@ class App:
         threading.Thread(target = self.monitor_udp, daemon = True).start()
         self.text_widget.insert(tk.END, f"PyFT8m\n", 'info')
         self.update_waterfall()
+        self.root.mainloop()
         
     def send_udp(self, msg):
         self.sock_tx.connect(('localhost', 2122))
@@ -86,19 +95,22 @@ class App:
             self.current_decodes.append(msg_dict)
             their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], msg_dict['fHz'], msg_dict['dt'], msg_dict['msg_tuple'], 
             idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(myCall) + 3 * (msg_tuple[1] == myCall)
-            display_type = ['norm','cq','to_me','from_me'][idx]
+            display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
             display_text = f"{their_snr:4s} {dt:5s} {fHz:6s} ~ {' '.join(msg_tuple)}"
             if msg_tuple[1] == in_qso_with:
                 reply = determine_reply(' '.join(msg_tuple))
                 self.send_udp({'mtype':'transmit', 'message':reply})
         elif msg_dict['mtype'] == 'rollover':
             display_type = 'info'
-            display_text = msg_dict['info']
-            self.text_widget.delete(1.0, tk.END)
+            display_text = ''
+            self.first_decode = False
         elif msg_dict['mtype'] == 'waterfall':
             self.waterfall_new_vals = [100 - int(v) for v in msg_dict['data'].split(',')]
             display_text = ''
         if display_text:
+            if not self.first_decode:
+                self.text_widget.delete(1.0, tk.END)
+                self.first_decode = True
             self.text_widget.insert(tk.END, f"{display_text}\n", display_type)
             self.text_widget.see('end')
 
@@ -122,10 +134,7 @@ class App:
             reply = determine_reply(rx_message)
             self.send_udp({'mtype':'transmit', 'message':reply})
 
-if True:
-    from receiver import Receiver
-    from transmitter import Transmitter
-    rx = Receiver()
-    tx = Transmitter()
-app = App(tk.Tk())
-app.root.mainloop()
+    def call_cq(self):
+        print("click")
+        self.send_udp({'mtype':'transmit', 'message':f"CQ {myCall} {myGrid}"})
+

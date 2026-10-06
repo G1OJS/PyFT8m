@@ -385,6 +385,7 @@ class Receiver:
         self.sock_out.send(json.dumps(msg_dict).encode('utf-8'))
 
     def manage_cycle(self):
+        print("Receiver running")
         cycle_searched = False
         t_cyc, t_cyc_prev = 0, 0
         while True:

@@ -67,7 +67,7 @@ def symbols_to_complex_audio(symbols, f_base = 873):
     return wf
 
 def symbols_to_audio_bytes(symbols, fs = SAMP_RATE, f_base=873.0, amplitude = 0.5):
-    waveform = np.imag(symbols_to_complex_audio(symbols))
+    waveform = np.imag(symbols_to_complex_audio(symbols), f_base)
     waveform = waveform.astype(np.float32)
     waveform = amplitude * waveform / np.max(np.abs(waveform))
     waveform_bytes = np.int16(waveform * 32767).tobytes()
@@ -268,6 +268,7 @@ class Transmitter:
         return delay
         
     def transmit_daemon(self):
+        print("Transmitter running")
         while True:
             time.sleep(0.1)
             rx_bytes, _ = self.sock.recvfrom(1024)
@@ -275,6 +276,7 @@ class Transmitter:
                 rx_dict = json.loads(rx_bytes.decode('utf-8'))
                 if rx_dict['mtype'] == 'transmit':
                     message = rx_dict['message']
+                    print(message)
                     if len(message.split(' ')) == 3:
                         symbols = get_ft8_symbols(message)
                         audio_bytes = symbols_to_audio_bytes(symbols, f_base = self.tx_freq)
