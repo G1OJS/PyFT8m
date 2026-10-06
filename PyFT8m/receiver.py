@@ -358,7 +358,7 @@ class AudioIn:
         z = np.fft.rfft(self.fft_in)[:self.nFreqs]
         self.tfgrid[1, self.tfgrid_ptr, :] = 20*np.log10(np.abs(z))
         
-        if self.tfgrid_ptr %10 == 0:
+        if self.tfgrid_ptr %12 == 0:
             self.send_waterfall_row()
         return (None, pyaudio.paContinue)
 
@@ -408,9 +408,10 @@ class Receiver:
     def send_waterfall_row(self, send_zeros = False):
         row = self.audio_in.tfgrid[0,self.audio_in.tfgrid_ptr,:]
         self.waterfall_max = np.max([np.max(row), self.waterfall_max])
-        row = (30 + np.clip(row - self.waterfall_max, -30, 0)) / 30
+        dBrng = 25
+        row = (dBrng + np.clip(row - self.waterfall_max, -dBrng, 0)) / dBrng
         a = 1 if not send_zeros else 0
-        row = ','.join([f"{r*a:.2f}"[-2:] for i, r in enumerate(row) if i % 3 == 0])
+        row = ','.join([f"{r*a:.2f}"[-2:] for i, r in enumerate(row) if i % 4 == 0])
         self.send_output({'mtype':'waterfall', 'data':row}, noprint = True)
 
     def search_and_decode(self):

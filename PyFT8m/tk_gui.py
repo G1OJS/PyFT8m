@@ -125,7 +125,7 @@ class Gui:
             dw = 500/len(self.waterfall_vals)
             xys = [(i*dw, v) for i,v in enumerate(self.waterfall_vals)]
             self.waterfall_canvas.coords(self.waterfall_line, xys)
-        self.waterfall_canvas.after(100, self.update_waterfall)
+        self.waterfall_canvas.after(250, self.update_waterfall)
 
     def row_click(self, e):
         global their_snr
