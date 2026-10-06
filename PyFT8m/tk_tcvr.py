@@ -30,10 +30,19 @@ class App:
         self.sock_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.decode_queue = queue.Queue()
         self.root = root
-        self.container = ttk.Frame(self.root) 
-        self.scrollbar = ttk.Scrollbar(self.container)
+        self.app_container = ttk.Frame(self.root)
+        
+        self.waterfall_container = ttk.Frame(self.app_container, height = 100, width = 500)
+        self.waterfall_canvas = tk.Canvas(self.waterfall_container, height = 100, width = 500, bg = 'pink')
+        self.waterfall_canvas.pack(side = 'top')
+        self.waterfall_line = self.waterfall_canvas.create_line(0,0,500,0, fill = 'green', width = 2)
+        self.waterfall_vals = None
+        self.waterfall_new_vals = None
+        
+        self.decodes_container = ttk.Frame(self.app_container) 
+        self.scrollbar = ttk.Scrollbar(self.decodes_container)
         self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.text_widget = tk.Text(self.container, wrap=tk.WORD, yscrollcommand=self.scrollbar.set)
+        self.text_widget = tk.Text(self.decodes_container, wrap=tk.WORD, yscrollcommand=self.scrollbar.set)
         self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.text_widget.tag_config('norm', foreground = 'white', background = 'blue', font=('Helvetica', 12))
@@ -44,10 +53,16 @@ class App:
         self.text_widget.bind('<Button-1>', self.row_click)
 
         self.scrollbar.config(command=self.text_widget.yview)
-        self.container.pack()
+
+        self.waterfall_container.pack(side = 'top')
+        self.app_container.pack(side = 'top')
+        self.decodes_container.pack(side = 'top')
+
         self.current_decodes = []
         self.root.bind("<<received_udp>>", self.received_udp)
         threading.Thread(target = self.monitor_udp, daemon = True).start()
+        self.text_widget.insert(tk.END, f"PyFT8m\n", 'info')
+        self.update_waterfall()
         
     def send_udp(self, msg):
         self.sock_tx.connect(('localhost', 2122))
@@ -63,6 +78,7 @@ class App:
 
     def received_udp(self, e):
         msg_dict = self.decode_queue.get()
+        display_text = ''
         if msg_dict['mtype'] == 'decode':
             self.current_decodes.append(msg_dict)
             their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], msg_dict['fHz'], msg_dict['dt'], msg_dict['msg_tuple'], 
@@ -72,11 +88,23 @@ class App:
         elif msg_dict['mtype'] == 'rollover':
             display_type = 'info'
             display_text = msg_dict['info']
-        else:
-            display_type = 'info'
-            display_text = msg_dict['info']        
-        self.text_widget.insert(tk.END, f"{display_text}\n", display_type)
-        self.text_widget.see('end')
+        elif msg_dict['mtype'] == 'waterfall':
+            self.waterfall_new_vals = [100 - int(v) for v in msg_dict['data'].split(',')]
+            display_text = ''
+        if display_text:
+            self.text_widget.insert(tk.END, f"{display_text}\n", display_type)
+            self.text_widget.see('end')
+
+    def update_waterfall(self):
+        if self.waterfall_vals is None:
+            self.waterfall_vals = self.waterfall_new_vals
+        if self.waterfall_vals is not None:
+            self.waterfall_vals = [(self.waterfall_vals[i] + self.waterfall_new_vals[i]) / 2 for i in range(len(self.waterfall_new_vals))]
+            dw = 500/len(self.waterfall_vals)
+            xys = [(i*dw, v) for i,v in enumerate(self.waterfall_vals)]
+            self.waterfall_canvas.coords(self.waterfall_line, xys)
+        self.waterfall_canvas.after(100, self.update_waterfall)
+
 
     def row_click(self, e):
         curr = e.widget.index("current").split('.')[0]

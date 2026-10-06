@@ -368,11 +368,12 @@ class Receiver:
         for sym_idx, tone in enumerate([3,1,4,0,6,5,2]):
             csync[sym_idx, tone * BPT] =  1
         self.csync_flat =  csync.ravel()
+        self.waterfall_max = 0
         self.send_output({'mtype':'info', 'info':'Receiver starting'})
         threading.Thread(target = self.manage_cycle, daemon=True ).start()
 
-    def send_output(self, msg_dict):
-        if self.output_type == 'print':
+    def send_output(self, msg_dict, noprint = False):
+        if self.output_type == 'print' and not noprint:
             print(msg_dict)
             return
         if self.sock_out is None:
@@ -382,19 +383,27 @@ class Receiver:
 
     def manage_cycle(self):
         cycle_searched = False
-        while time.time() % 15 > 0.5:
-            time.sleep(0.1)
         t_cyc, t_cyc_prev = 0, 0
         while True:
             time.sleep(0.1)
+            self.send_waterfall_row()
             t_cyc = time.time() % 15
             if t_cyc < t_cyc_prev:
                 self.audio_in.check_pointer()
                 cycle_searched = False
             if t_cyc > T_SEARCH_1 and not cycle_searched:
+                self.send_waterfall_row(send_zeros = True)
                 cycle_searched = True
                 self.search_and_decode()
             t_cyc_prev = t_cyc
+
+    def send_waterfall_row(self, send_zeros = False):
+        row = self.audio_in.tfgrid[0,self.audio_in.tfgrid_ptr,:]
+        self.waterfall_max = np.max([np.max(row), self.waterfall_max])
+        row = (30 + np.clip(row - self.waterfall_max, -30, 0)) / 30
+        a = 1 if not send_zeros else 0
+        row = ','.join([f"{r*a:.2f}"[-2:] for i, r in enumerate(row) if i % 3 == 0])
+        self.send_output({'mtype':'waterfall', 'data':row}, noprint = True)
 
     def search_and_decode(self):
         t0_cyc = 15 * int(time.time() / 15)
