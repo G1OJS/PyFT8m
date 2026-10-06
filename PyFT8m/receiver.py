@@ -145,7 +145,7 @@ def crc_unpack91(bits91_int):
             msg = unpack(bits77_int) 
     return msg, bits77_int
 
-def decode_raw91(p):
+def decode_raw91(p, i):
     def syms_to_int(syms):
         bint = 0
         for s in syms:
@@ -153,15 +153,15 @@ def decode_raw91(p):
         return bint
     ch_syms = np.argmax(p[:31, :], axis = 1)
     de_gray = [0,1,3,2,6,4,5,7]
-    for i in range(2):
-        if i == 1:
+    for j in range(2):
+        if j == 1:
             ch_syms[:11] = 0
             ch_syms[8] = 1
         syms = [de_gray[s] for s in ch_syms]
         bits91_int = syms_to_int(syms) >> 2
         msg_tuple, bits77_int = crc_unpack91(bits91_int)
         if msg_tuple:
-            return msg_tuple, f"early_GOOD91{['','_CQ'][i]}"
+            return msg_tuple, f"GOOD91 t={i} {['','CQ'][j]}"
     return None, None
 
 
@@ -185,7 +185,7 @@ llr175 = np.zeros(175, dtype=np.float32)
 mC2V_prev = np.zeros(CVidx_all.shape, dtype=np.float32)
 import warnings
 warnings.filterwarnings("error")
-def decode(p):
+def decode(p, i):
     def atanh(x):
         a = 1.03
         y = -x / ((x-a)*(x+a))
@@ -225,7 +225,7 @@ def decode(p):
         if(ncheck == 0):
             bits91_int = bits_to_int(llr175[1:92])
             msg_tuple, bits77_int = crc_unpack91(bits91_int)
-            return msg_tuple, f"LDPC_{ldpc_it+1}_its", llr_saved, ch_llr_saved
+            return msg_tuple, f"LDPC t={i} its={ldpc_it+1}", llr_saved, ch_llr_saved
         if ldpc_it == 5:
             llr_saved = llr175[1:]
     return None, '', llr_saved, ch_llr_saved
@@ -239,7 +239,8 @@ for i, row in enumerate(kGEN):
         A[i, 90 - j] = (row >> j) & 1
 G0 = np.concatenate([np.eye(91, dtype=np.uint8), A.T],axis=1)
 
-def osd(llr):
+def osd(llr_pack):
+    source, llr = llr_pack
     chbits174 = (llr>0).astype(np.uint8)
     chvals174 = np.abs(llr)
 
@@ -270,7 +271,7 @@ def osd(llr):
     bits91_int = bits_to_int(base_cw)
     msg_tuple, bits77_int = crc_unpack91(bits91_int)
     if msg_tuple:
-        return msg_tuple, 0
+        return msg_tuple, f"OSD0{source}"
 
     fliplist = rowperm[::-1]
     current_best_distance = 1e20
@@ -291,8 +292,8 @@ def osd(llr):
             bits91_int = bits_to_int(cw_out91)
             msg_tuple, bits77_int = crc_unpack91(bits91_int)
             if msg_tuple:
-                return msg_tuple, 2
-    return None, None
+                return msg_tuple, f"OSD2{source}"
+    return None, ''
 
 #============== AUDIO ========================================================
 class AudioIn:
@@ -305,8 +306,7 @@ class AudioIn:
         self.audio_buffer = np.zeros(fft_len + self.samples_per_half_hop, dtype=np.float32)
         self.fft_in = np.zeros(fft_len, dtype=np.float32)
         self.fft_window = fft_window=np.hanning(fft_len).astype(np.float32)
-        self.tfgrid1 = np.ones((HPC, self.nFreqs), dtype = np.float32)
-        self.tfgrid2 = np.ones((HPC, self.nFreqs), dtype = np.float32)
+        self.tfgrid = np.ones((2, HPC, self.nFreqs), dtype = np.float32)
         indev = self.find_device(input_device_keywords)
         if indev is None:
             print("Couldn't find input device")
@@ -343,11 +343,11 @@ class AudioIn:
 
         np.multiply(self.audio_buffer[self.samples_per_half_hop:], self.fft_window, out=self.fft_in)
         z = np.fft.rfft(self.fft_in)[:self.nFreqs]
-        self.tfgrid1[self.tfgrid_ptr, :] = 20*np.log10(np.abs(z))
+        self.tfgrid[0, self.tfgrid_ptr, :] = 20*np.log10(np.abs(z))
 
         np.multiply(self.audio_buffer[:-self.samples_per_half_hop], self.fft_window, out=self.fft_in)
         z = np.fft.rfft(self.fft_in)[:self.nFreqs]
-        self.tfgrid2[self.tfgrid_ptr, :] = 20*np.log10(np.abs(z))
+        self.tfgrid[1, self.tfgrid_ptr, :] = 20*np.log10(np.abs(z))
         
         self.tfgrid_ptr = (self.tfgrid_ptr + 1) % HPC
         return (None, pyaudio.paContinue)
@@ -412,7 +412,7 @@ class Receiver:
         for f0_idx in range(int(100 / 3.125), self.audio_in.nFreqs - 8 * BPT, 1):
             time.sleep(0)
             freq_idxs = f0_idx + self.base_freq_idxs
-            p = self.audio_in.tfgrid2[:, f0_idx:f0_idx+8*BPT]
+            p = self.audio_in.tfgrid[1, :, f0_idx:f0_idx+8*BPT]
             new_origin = {'score':0}
             for h0_idx in range(H0_RANGE[0], H0_RANGE[1]):
                 vals = p[h0_idx + self.hop_idxs_Costas + 36 * HPS, :].ravel()
@@ -429,7 +429,7 @@ class Receiver:
                 fHz = 3.125 * f0_idx
                 abs_t0 = t0_cyc + tsec
                 new_origin.update({'f0_idx': f0_idx, 'cs':cycle_start_str, 'p_idx':p_idx, 'fHz': fHz, 'dt': dt, 'abs_t0':abs_t0, 
-                                   'decode_info': None, 'decode_result':None, 'llr_saved':None})
+                                   'decode_info': None, 'decode_result':None, 'saved_llrs':[]})
                 candidates.append(new_origin)
         candidates.sort(key = lambda c: -c['score'])
         candidates = candidates[:MAX_CANDS]
@@ -438,8 +438,7 @@ class Receiver:
 
     def decode(self):
         n_cands = len(self.candidates)
-        last_attempt_start, last_attempt_stop = 0, 0
-        n_remaining = n_cands
+        self.last_attempt_stop = 0
         
         def stop_decoding():
             return 9 < time.time() % 15 < T_SEARCH_1
@@ -450,107 +449,52 @@ class Receiver:
             overwritten = t > cand['abs_t0'] + 15 + 0.16*7
             return arriving and not overwritten and not stop_decoding()
 
+        # good91 after message symbols arrive
         for c in self.candidates:
             if not stop_decoding():
                 while wait_for_signal(c, last_sym = 31):
                     time.sleep(0.05)
-                p = self.audio_in.tfgrid1[c['p_idx']]
-                c['decode_result'], c['decode_info'] = decode_raw91(p)
-                if c['decode_result']:
-                    n_remaining -= 1
-                self.check_and_send(c)
+                for itime in range(2):
+                    p = self.audio_in.tfgrid[itime,:,:][c['p_idx']]
+                    c['decode_result'], c['decode_info'] = decode_raw91(p, itime)
+                    self.check_and_send(c)
 
-        for c in self.candidates:
-            if not stop_decoding():
-                while wait_for_signal(c, last_sym = 31):
-                    time.sleep(0.05)
-                p = self.audio_in.tfgrid2[c['p_idx']]
-                c['decode_result'], c['decode_info'] = decode_raw91(p)
-                if c['decode_result']:
-                    c['decode_info'] += 'B'
-                    n_remaining -= 1
-                self.check_and_send(c)
-     
+        # ldpc, saving input and output llrs
         for c in self.candidates:
             if not stop_decoding():
                 if not c['decode_result']:
                     while wait_for_signal(c, last_sym = 57):
                         time.sleep(0.05)
-                    p = self.audio_in.tfgrid1[c['p_idx']]
-                    c['decode_result'], c['decode_info'], c['llr_saved1'], c['ch_llr_saved1'] = decode(p)
-                    if c['decode_result']:
-                        n_remaining -= 1
-                    self.check_and_send(c)
+                    for itime in range(2):
+                        p = self.audio_in.tfgrid[itime,:,:][c['p_idx']]
+                        c['decode_result'], c['decode_info'], llr_out, ch_llr = decode(p, itime)
+                        c['saved_llrs'].append((f"ch t={itime}", ch_llr))
+                        if llr_out is not None:
+                            c['saved_llrs'].append((f"ldpc   t={itime}", llr_out))
+                        self.check_and_send(c)
 
-        for c in self.candidates:
-            if not stop_decoding():
-                if not c['decode_result']:
-                    while wait_for_signal(c, last_sym = 57):
-                        time.sleep(0.05)
-                    p = self.audio_in.tfgrid2[c['p_idx']]
-                    c['decode_result'], c['decode_info'], c['llr_saved2'], c['ch_llr_saved2'] = decode(p)
-                    if c['decode_result']:
-                        c['decode_info'] += 'B'
-                        n_remaining -= 1
-                    self.check_and_send(c)
-
+        # osd on all saved llrs
         self.candidates.sort(key = lambda c: -c['score'])
         for c in self.candidates:
             if not stop_decoding():
                 if not c['decode_result']:
-                    if c['ch_llr_saved1'] is not None:
-                        last_attempt_start = time.time()
-                        c['decode_result'], order = osd(c['ch_llr_saved1'])
-                        c['decode_info'] = f"OSDch_ord{order}"
-                        if c['decode_result']:
-                            n_remaining -= 1
+                    for llr in c['saved_llrs']:
+                        c['decode_result'], c['decode_info'] = osd(llr)
                         self.check_and_send(c)
-
-        for c in self.candidates:
-            if not stop_decoding():
                 if not c['decode_result']:
-                    if c['ch_llr_saved2'] is not None:
-                        last_attempt_start = time.time()
-                        c['decode_result'], order = osd(c['ch_llr_saved2'])
-                        c['decode_info'] = f"OSDch_ord{order}B"
-                        n_remaining -= 1
-                        self.check_and_send(c)
-                        last_attempt_stop = time.time()
+                    c['decode_result'] = 'stop'
 
-
-        """
-        for c in self.candidates:
-            if not stop_decoding():
-                if not c['decode_result']:
-                    if c['llr_saved1'] is not None:
-                        last_attempt_start = time.time()
-                        c['decode_result'], order = osd(c['llr_saved1'])
-                        c['decode_info'] = f"OSDldpc_ord{order}"
-                        if c['decode_result']:
-                            n_remaining -= 1
-                        self.check_and_send(c)
-
-        for c in self.candidates:
-            if not stop_decoding():
-                if not c['decode_result']:
-                    if c['llr_saved2'] is not None:
-                        last_attempt_start = time.time()
-                        c['decode_result'], order = osd(c['llr_saved2'])
-                        c['decode_info'] = f"OSDldpc_ord{order}B"
-                        n_remaining -= 1
-                        self.check_and_send(c)
-                        last_attempt_stop = time.time()
-        """
-
-        return (f"Last decode attempt {last_attempt_start % 15:6.1f} to {last_attempt_stop % 15:6.1f},"
+        n_remaining = len([c for c in self.candidates if not c['decode_result']])
+        return (f"Last decode attempt {self.last_attempt_stop % 15:6.1f},"
                  + f" remaining: {n_remaining}")
      
 
     def check_and_send(self, c):
+        self.last_attempt_stop = time.time()
         if c['decode_result']:
             if not c['decode_result'] in self.duplicate_filter:
-                p = self.audio_in.tfgrid1[c['p_idx']]
-                c['decode_info'] += f" {c['score']:5.2f}"
+                p = self.audio_in.tfgrid[0,:,:][c['p_idx']]
+                c['decode_info'] = f" s={c['score']:5.2f} {c['decode_info']}"
                 their_snr = np.clip(int(np.max(p)-np.min(p)) - 58, -24, 24)
                 self.duplicate_filter.append(c['decode_result'])
                 self.send_output({'mtype':'decode', 'cyclestart_string': c['cs'], 't_decode':time.time(),
