@@ -82,7 +82,7 @@ def unpack_std(bits74, i3):
         prefix = 'R' if (g16 >> 15) else ''
         grid_rpt = prefix + f"{(g15 - 32435):+03d}"
     msg_tuple = (call_29(ca29, i3), call_29(cb29, i3), grid_rpt)
-    if not ('' in msg_tuple) and not (None in msg_tuple):
+    if not ('' in msg_tuple) and not (None in msg_tuple) and not 'CQ' in msg_tuple[-1]:
         return msg_tuple
 
 def call_29(call_int29, i3):    
@@ -171,7 +171,7 @@ HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH_0, T_SEARCH_1 =  4.6, 10.6
 MIN_SCORE = 0.5
 MAX_CANDS = 400
-MAX_LDPC = 20
+MAX_LDPC = 25
 H0_RANGE = [int(SYM_RATE * HPS * t) for t in [-1.5, 3.5]]
 
 def bits_to_int(llr):
@@ -268,11 +268,12 @@ def osd(llr_pack):
     chbits91[rowperm] = chbits91
 
     base_cw = ((chbits91 @ G) & 1)
+    """
     bits91_int = bits_to_int(base_cw)
     msg_tuple, bits77_int = crc_unpack91(bits91_int)
     if msg_tuple:
         return msg_tuple, f"OSD0{source}"
-
+    """
     fliplist = rowperm[::-1]
     current_best_distance = 1e20
     cw_out91 = None
@@ -459,7 +460,7 @@ class Receiver:
                     c['decode_result'], c['decode_info'] = decode_raw91(p, itime)
                     self.check_and_send(c)
 
-        # ldpc, saving input and output llrs
+        # ldpc, saving input and output llrs ONLY if score < 1.25 (limits OSD load to typically-useful range)
         for c in self.candidates:
             if not stop_decoding():
                 if not c['decode_result']:
@@ -468,9 +469,10 @@ class Receiver:
                     for itime in range(2):
                         p = self.audio_in.tfgrid[itime,:,:][c['p_idx']]
                         c['decode_result'], c['decode_info'], llr_out, ch_llr = decode(p, itime)
-                        c['saved_llrs'].append((f"ch t={itime}", ch_llr))
-                        if llr_out is not None:
-                            c['saved_llrs'].append((f"op t={itime}", llr_out))
+                        if c['score'] < 1.25:
+                            c['saved_llrs'].append((f"ch t={itime}", ch_llr))
+                            if llr_out is not None:
+                                c['saved_llrs'].append((f"op t={itime}", llr_out))
                         self.check_and_send(c)
 
         # osd on all saved llrs
@@ -484,9 +486,9 @@ class Receiver:
                 if not c['decode_result']:
                     c['decode_result'] = 'stop'
 
-        n_remaining = len([c for c in self.candidates if not c['decode_result']])
+        n_remaining_with_saved_llrs = len([c for c in self.candidates if any(c['saved_llrs']) and not c['decode_result']])
         return (f"Last decode attempt {self.last_attempt_stop % 15:6.1f},"
-                 + f" remaining: {n_remaining}")
+                 + f" remaining_with_saved_llrs: {n_remaining_with_saved_llrs}")
      
 
     def check_and_send(self, c):
