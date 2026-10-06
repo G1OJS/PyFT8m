@@ -1,15 +1,16 @@
 import tkinter as tk
 from tkinter import ttk
 import time, threading, socket, queue, json
+import numpy as np
 
 myCall, myGrid = "G1OJS", "IO90"
+their_snr = None
+in_qso_with = ''
 
-def determine_reply(rx_message, their_snr):
-    if rx_message == '':
-        return f"CQ {myCall} {myGrid}"
-    else:
-        hail, their_call, grid_rpt = rx_message.split(' ')
-        
+def determine_reply(rx_message):
+    global their_snr, in_qso_with
+    hail, their_call, grid_rpt = rx_message.split(' ')
+    in_qso_with = their_call
     if hail.startswith("CQ"):
         reply = f"{their_call} {myCall} {myGrid[:4]}"   
     elif hail.startswith(myCall):
@@ -20,6 +21,7 @@ def determine_reply(rx_message, their_snr):
             reply = f"{their_call} {myCall} RR73"
         if grid_rpt == 'RR73':
             reply = f"{their_call} {myCall} 73"
+            in_qso_with = ''
     return reply
 
 class App:
@@ -86,6 +88,9 @@ class App:
             idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(myCall) + 3 * (msg_tuple[1] == myCall)
             display_type = ['norm','cq','to_me','from_me'][idx]
             display_text = f"{their_snr:4s} {dt:5s} {fHz:6s} ~ {' '.join(msg_tuple)}"
+            if msg_tuple[1] == in_qso_with:
+                reply = determine_reply(' '.join(msg_tuple))
+                self.send_udp({'mtype':'transmit', 'message':reply})
         elif msg_dict['mtype'] == 'rollover':
             display_type = 'info'
             display_text = msg_dict['info']
@@ -108,12 +113,13 @@ class App:
         self.waterfall_canvas.after(100, self.update_waterfall)
 
     def row_click(self, e):
+        global their_snr
         curr = e.widget.index("current").split('.')[0]
         row_txt = e.widget.get(f"{curr}.0", f"{curr}.end")
         if "~" in row_txt:
             rx_message = row_txt.split('~')[1][1:]
             their_snr = row_txt[:3]
-            reply = determine_reply(rx_message, their_snr)
+            reply = determine_reply(rx_message)
             self.send_udp({'mtype':'transmit', 'message':reply})
 
 if True:

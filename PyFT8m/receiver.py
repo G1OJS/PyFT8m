@@ -298,7 +298,8 @@ def osd(llr_pack):
 
 #============== AUDIO ========================================================
 class AudioIn:
-    def __init__(self, input_device_keywords, max_freq):
+    def __init__(self, input_device_keywords, max_freq, send_waterfall_row):
+        self.send_waterfall_row = send_waterfall_row
         samples_per_hop = int(SAMP_RATE / (SYM_RATE * HPS))
         self.samples_per_half_hop = int(samples_per_hop / 2)
         fft_len = int(BPT * SAMP_RATE // SYM_RATE)
@@ -341,6 +342,7 @@ class AudioIn:
         ns = len(samples)
         self.audio_buffer[:-ns] = self.audio_buffer[ns:]
         self.audio_buffer[-ns:] = samples
+        self.tfgrid_ptr = (self.tfgrid_ptr + 1) % HPC
 
         np.multiply(self.audio_buffer[self.samples_per_half_hop:], self.fft_window, out=self.fft_in)
         z = np.fft.rfft(self.fft_in)[:self.nFreqs]
@@ -350,12 +352,13 @@ class AudioIn:
         z = np.fft.rfft(self.fft_in)[:self.nFreqs]
         self.tfgrid[1, self.tfgrid_ptr, :] = 20*np.log10(np.abs(z))
         
-        self.tfgrid_ptr = (self.tfgrid_ptr + 1) % HPC
+        if self.tfgrid_ptr %10 == 0:
+            self.send_waterfall_row()
         return (None, pyaudio.paContinue)
 
 class Receiver:
     def __init__(self, mic_keywords = ['Mic', 'CODEC'], max_freq = 2900, output_type = 'udp'):
-        self.audio_in = AudioIn(mic_keywords, max_freq)
+        self.audio_in = AudioIn(mic_keywords, max_freq, self.send_waterfall_row)
         self.output_type = output_type
         self.candidates = []
         self.duplicate_filter = []
@@ -386,13 +389,11 @@ class Receiver:
         t_cyc, t_cyc_prev = 0, 0
         while True:
             time.sleep(0.1)
-            self.send_waterfall_row()
             t_cyc = time.time() % 15
             if t_cyc < t_cyc_prev:
                 self.audio_in.check_pointer()
                 cycle_searched = False
             if t_cyc > T_SEARCH_1 and not cycle_searched:
-                self.send_waterfall_row(send_zeros = True)
                 cycle_searched = True
                 self.search_and_decode()
             t_cyc_prev = t_cyc
