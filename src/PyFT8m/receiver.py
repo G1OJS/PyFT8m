@@ -355,14 +355,14 @@ class AudioIn:
         return (None, pyaudio.paContinue)
 
 class Receiver:
-    def __init__(self, max_freq = 2900, output_type = 'udp', latest_decode = 2, sock_rcvr_out = 2121):
+    def __init__(self, max_freq = 2900, output_type = 'udp', latest_decode = 2, rcvr_out_port = 2121):
         self.latest_decode = latest_decode
         self.max_freq = max_freq
-        self.sock_rcvr_out = sock_rcvr_out
+        self.rcvr_out_port = rcvr_out_port
         self.output_type = output_type
         self.candidates = []
         self.duplicate_filter = []
-        self.sock_out = None
+        self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         payload_symb_idxs = list(range(7, 36)) + list(range(43, 72))
         self.base_payload_hops = np.array([HPS * s for s in payload_symb_idxs])
         self.hop_idxs_Costas =  np.arange(7) * HPS
@@ -383,10 +383,13 @@ class Receiver:
         if self.output_type == 'print' and not noprint:
             print(msg_dict)
             return
-        if self.sock_out is None:
-            self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock_out.connect(('localhost', self.sock_rcvr_out))
-        self.sock_out.send(json.dumps(msg_dict).encode('utf-8'))
+        self._send_udp(msg_dict, self.rcvr_out_port)
+        
+    def _send_udp(self, msg, port):
+        self.sock_out.connect(('localhost', port))
+        if isinstance(msg, dict):
+            msg = json.dumps(msg)
+        self.sock_out.sendall(msg.encode('utf-8'))
 
     def manage_cycle(self):
         print("Receiver running")

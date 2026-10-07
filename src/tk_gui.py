@@ -1,5 +1,5 @@
 import tkinter as tk
-import time, threading, socket, queue, json, os, sys
+import time, threading, socket, queue, json, os, sys, psutil, subprocess
 import numpy as np
 
 class Settings:
@@ -53,14 +53,15 @@ class Settings:
                     self.cfg_vars[k].set(cfg_dict[k])
 
 class Gui:
-    def __init__(self, sock_gui_cmd = 2122, sock_rcvr_out = 2121, config_location = '', rx_start = None, tx_start = None):
-        self.sock_gui_cmd = sock_gui_cmd
+    def __init__(self, gui_cmd_port = 2122, rcvr_out_port = 2121, config_location = '',
+                 rx_start = None, tx_start = None):
+        self.gui_cmd_port = gui_cmd_port
         self.settings = Settings(config_location)
         self.rx_start = rx_start
         self.tx_start = tx_start
         self.call_hashes = {}
         self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock_in.bind(('', sock_rcvr_out))
+        self.sock_in.bind(('', rcvr_out_port))
         self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_in = queue.Queue()
         self.root = tk.Tk()
@@ -128,10 +129,10 @@ class Gui:
 
     def open_settings(self):
         self.settings.open()
-        
-    def send_udp(self, msg):
-        self.sock_out.connect(('localhost', self.sock_gui_cmd))
-        self.sock_out.send(json.dumps(msg).encode('utf-8'))
+
+    def _send_udp(self, msg, port):
+        self.sock_out.connect(('localhost', port))
+        self.sock_out.sendall(json.dumps(msg).encode('utf-8'))
 
     def monitor_udp(self):
         while not self.shutdown:
@@ -153,7 +154,8 @@ class Gui:
             display_text = f"{their_snr:4s} {dt:5s} {fHz:6s} ~ {' '.join(msg_tuple)}"
             if msg_tuple[1] == self.their_call:
                 reply = self.determine_reply(' '.join(msg_tuple))
-                self.send_udp({'mtype':'transmit', 'message':reply})
+                if reply:
+                    self._send_udp({'mtype':'transmit', 'message':reply}, self.gui_cmd_port)
         elif msg_dict['mtype'] == 'rollover':
             display_type = 'info'
             display_text = ''
@@ -196,9 +198,12 @@ class Gui:
                 reply = f"{self.their_call} {self.my_call} R{self.their_snr}"
             if any([m for m in ['R+','R-','RRR'] if m in grid_rpt]):
                 reply = f"{self.their_call} {self.my_call} RR73"
+                self.their_call = ''
             if grid_rpt == 'RR73':
                 reply = f"{self.their_call} {self.my_call} 73"
                 self.their_call = ''
+        else:
+            reply = ''
         return reply
 
     def row_click(self, e):
@@ -208,14 +213,15 @@ class Gui:
             rx_message = row_txt.split('~')[1][1:]
             self.their_snr = row_txt[:3]
             reply = self.determine_reply(rx_message)
-            self.send_udp({'mtype':'transmit', 'message':reply})
+            if reply:
+                self._send_udp({'mtype':'transmit', 'message':reply}, self.gui_cmd_port)
 
     def call_cq(self):
         if self.my_call and self.my_grid:
-            self.send_udp({'mtype':'transmit', 'message':f"CQ {self.my_call} {self.my_grid}"})
+            self._send_udp({'mtype':'transmit', 'message':f"CQ {self.my_call} {self.my_grid}"}, self.gui_cmd_port)
 
     def stop_transmit(self):
-        self.send_udp({'mtype':'stop_transmit'})
+        self._send_udp({'mtype':'stop_transmit'}, self.gui_cmd_port)
 
 
 if __name__ == "__main__":
@@ -223,9 +229,16 @@ if __name__ == "__main__":
     
     config_location = os.path.join(os.path.expanduser("~"), 'PyFT8m.cfg')
 
-    rx = Receiver(max_freq = 2900, latest_decode = 2, sock_rcvr_out = 2121)
-    tx = Transmitter(max_tx_cycletime_start = 3, sock_gui_cmd = 2122)
-    tx.init_hamlib(com_rig = 'COM4', com_baud = 9600, rigctld = 'C:/WSJT/wsjtx/bin/rigctld-wsjtx', rig_code = 3070, hamlib_port = 4532)
-
-    gui = Gui(sock_gui_cmd = 2122, sock_rcvr_out = 2121, config_location = config_location, rx_start = rx.start, tx_start = tx.start)
+    com_rig, com_baud, rigctld, rig_code = 'COM4',9600,'C:/WSJT/wsjtx/bin/rigctld-wsjtx', 3070
+    # above 4 params to go in config eventually
+    if not any(['rigctld' in i.name() for i in psutil.process_iter()]):
+        cmd = f"{rigctld} -m {rig_code} -r {com_rig} -s {com_baud}"
+        threading.Thread(target = subprocess.run, args = (cmd,)).start()
+            
+    rx = Receiver(max_freq = 2900, latest_decode = 2, rcvr_out_port = 2121)
+    tx = Transmitter(max_tx_cycletime_start = 3, gui_cmd_port = 2122, hamlib_port = 4532)
+    
+    gui = Gui(gui_cmd_port = 2122, rcvr_out_port = 2121,
+              config_location = config_location, 
+              rx_start = rx.start, tx_start = tx.start)
 
