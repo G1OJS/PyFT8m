@@ -156,10 +156,10 @@ class Gui:
         display_text = ''
         if msg_dict['mtype'] == 'decode':
             self.current_decodes.append(msg_dict)
-            their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], msg_dict['fHz'], msg_dict['dt'], msg_dict['msg_tuple'], 
+            their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], f"{float(msg_dict['fHz']):07.2f}", msg_dict['dt'], msg_dict['msg_tuple'], 
             idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(self.my_call) + 3 * (msg_tuple[1] == self.my_call)
             display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
-            display_text = f"{their_snr:4s} {dt:5s} {fHz:06s} ~ {' '.join(msg_tuple)}"
+            display_text = f"{their_snr:4s} {dt:5s} {fHz:7s} ~ {' '.join(msg_tuple)}"
             if msg_tuple[1] == self.their_call:
                 reply = self.determine_reply(' '.join(msg_tuple))
                 if reply:
