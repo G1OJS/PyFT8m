@@ -7,6 +7,9 @@ T_CYC = 15
 TX_T0 = 0.5
 MAX_TX_START_CYCLETIME = 3
 
+SOCK_RCVR_OUT = 2121
+SOCK_GUI_OUT = 2122
+
 #==================== SOUNDCARD OUT ================================================================
 
 class SoundcardOut:
@@ -239,8 +242,8 @@ class Transmitter:
         self.tx_freq = 777
         self.tx_payload = None
         self.soundcard_out = SoundcardOut()
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(('', 2122))
+        self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock_in.bind(('', SOCK_GUI_OUT))
         self._init_hamlib()
         threading.Thread(target = self.transmit_daemon, daemon = True).start()
 
@@ -272,7 +275,7 @@ class Transmitter:
         print("Transmitter running")
         while True:
             time.sleep(0.1)
-            rx_bytes, _ = self.sock.recvfrom(1024)
+            rx_bytes, _ = self.sock_in.recvfrom(1024)
             if rx_bytes:
                 rx_dict = json.loads(rx_bytes.decode('utf-8'))
                 if rx_dict['mtype'] == 'transmit':

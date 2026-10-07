@@ -7,14 +7,14 @@ SYM_RATE, SAMP_RATE = 6.25, 12000
 MIN_SCORE = 0.5
 MAX_CANDS = 400
 MAX_LDPC = 25
-PyFT8_UDP_SOCK = 2121
+
 #------------------------------
 HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH =  TIME_WINDOW[1]+(36+7)/SYM_RATE
 H0_RANGE = [int(SYM_RATE * HPS * t) for t in TIME_WINDOW]
 
-
-
+SOCK_RCVR_OUT = 2121
+SOCK_GUI_OUT = 2122
 
 # =============== Call hashing ========================================
 call_hashes = {}
@@ -304,8 +304,7 @@ def osd(llr_pack):
 
 #============== AUDIO ========================================================
 class AudioIn:
-    def __init__(self, input_device_keywords, max_freq, send_waterfall_row):
-        self.send_waterfall_row = send_waterfall_row
+    def __init__(self, input_device_keywords, max_freq):
         samples_per_hop = int(SAMP_RATE / (SYM_RATE * HPS))
         self.samples_per_half_hop = int(samples_per_hop / 2)
         fft_len = int(BPT * SAMP_RATE // SYM_RATE)
@@ -358,13 +357,11 @@ class AudioIn:
         z = np.fft.rfft(self.fft_in)[:self.nFreqs]
         self.tfgrid[1, self.tfgrid_ptr, :] = 20*np.log10(np.abs(z))
         
-        if self.tfgrid_ptr %12 == 0:
-            self.send_waterfall_row()
         return (None, pyaudio.paContinue)
 
 class Receiver:
     def __init__(self, mic_keywords = ['Mic', 'CODEC'], max_freq = 2900, output_type = 'udp'):
-        self.audio_in = AudioIn(mic_keywords, max_freq, self.send_waterfall_row)
+        self.audio_in = AudioIn(mic_keywords, max_freq)
         self.output_type = output_type
         self.candidates = []
         self.duplicate_filter = []
@@ -380,6 +377,7 @@ class Receiver:
         self.waterfall_max = 0
         self.send_output({'mtype':'info', 'info':'Receiver starting'})
         threading.Thread(target = self.manage_cycle, daemon=True ).start()
+        threading.Thread(target = self.send_waterfall_rows, daemon=True ).start()
 
     def send_output(self, msg_dict, noprint = False):
         if self.output_type == 'print' and not noprint:
@@ -387,7 +385,7 @@ class Receiver:
             return
         if self.sock_out is None:
             self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock_out.connect(('localhost', PyFT8_UDP_SOCK))
+        self.sock_out.connect(('localhost', SOCK_RCVR_OUT))
         self.sock_out.send(json.dumps(msg_dict).encode('utf-8'))
 
     def manage_cycle(self):
@@ -405,14 +403,15 @@ class Receiver:
                 self.search_and_decode()
             t_cyc_prev = t_cyc
 
-    def send_waterfall_row(self, send_zeros = False):
-        row = self.audio_in.tfgrid[0,self.audio_in.tfgrid_ptr,:]
-        self.waterfall_max = np.max([np.max(row), self.waterfall_max])
-        dBrng = 25
-        row = (dBrng + np.clip(row - self.waterfall_max, -dBrng, 0)) / dBrng
-        a = 1 if not send_zeros else 0
-        row = ','.join([f"{r*a:.2f}"[-2:] for i, r in enumerate(row) if i % 4 == 0])
-        self.send_output({'mtype':'waterfall', 'data':row}, noprint = True)
+    def send_waterfall_rows(self):
+        while True:
+            time.sleep(0.25)
+            row = self.audio_in.tfgrid[0,self.audio_in.tfgrid_ptr,:]
+            self.waterfall_max = np.max([np.max(row), self.waterfall_max])
+            dBrng = 25
+            row = (dBrng + np.clip(row - self.waterfall_max, -dBrng, 0)) / dBrng
+            row = ','.join([f"{r:.2f}"[-2:] for i, r in enumerate(row) if i % 4 == 0])
+            self.send_output({'mtype':'waterfall', 'data':row}, noprint = True)
 
     def search_and_decode(self):
         t0_cyc = 15 * int(time.time() / 15)
@@ -508,7 +507,6 @@ class Receiver:
         return (f"Last decode attempt {self.last_attempt_stop % 15:6.1f},"
                  + f" remaining_with_saved_llrs: {n_remaining_with_saved_llrs}")
      
-
     def check_and_send(self, c):
         self.last_attempt_stop = time.time()
         if c['decode_result']:
@@ -520,9 +518,3 @@ class Receiver:
                 self.send_output({'mtype':'decode', 'cyclestart_string': c['cs'], 't_decode':time.time(),
                                   'fHz':f"{c['fHz']:7.2f}", 'dt':f"{c['dt']:+04.2f}", 'decode_info':c['decode_info'],
                                   'their_snr':f"{their_snr:+03d}", 'msg_tuple':c['decode_result']})
-            
-
-if __name__ == "__main__":
-    rx = Receiver(mic_keywords = ['Mic', 'CODEC'], max_freq = 2900, output_type = 'print')
- 
-

@@ -1,11 +1,10 @@
 import tkinter as tk
-from tkinter import ttk
 import time, threading, socket, queue, json
 import numpy as np
 
 myCall, myGrid = "G1OJS", "IO90"
-PyFT8_UDP_SOCK = 2121
-
+SOCK_RCVR_OUT = 2121
+SOCK_GUI_OUT = 2122
 
 their_snr = None
 in_qso_with = ''
@@ -30,14 +29,14 @@ def determine_reply(rx_message):
 class Gui:
     def __init__(self):
         self.call_hashes = {}
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(('', PyFT8_UDP_SOCK))
-        self.sock_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.decode_queue = queue.Queue()
+        self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock_in.bind(('', SOCK_RCVR_OUT))
+        self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.udp_in = queue.Queue()
         self.root = tk.Tk()
-        self.app_container = ttk.Frame(self.root)
+        self.app_container = tk.Frame(self.root)
 
-        self.sidebar_container = ttk.Frame(self.app_container, height = 500, width = 100)
+        self.sidebar_container = tk.Frame(self.app_container, height = 500, width = 100)
         self.sidebar_container.pack(side = 'left', fill = 'y')
         self.buttons = []
         bc = self.sidebar_container
@@ -45,15 +44,15 @@ class Gui:
         for btn in self.buttons:
             btn.pack(side = 'top', anchor = 'n')
         
-        self.waterfall_container = ttk.Frame(self.app_container, height = 100, width = 500)
+        self.waterfall_container = tk.Frame(self.app_container, height = 100, width = 500)
         self.waterfall_canvas = tk.Canvas(self.waterfall_container, height = 100, width = 500, bg = 'pink')
         self.waterfall_canvas.pack(side = 'top')
         self.waterfall_line = self.waterfall_canvas.create_line(0,0,500,0, fill = 'green', width = 2)
         self.waterfall_vals = None
         self.waterfall_new_vals = None
         
-        self.decodes_container = ttk.Frame(self.app_container) 
-        self.scrollbar = ttk.Scrollbar(self.decodes_container)
+        self.decodes_container = tk.Frame(self.app_container) 
+        self.scrollbar = tk.Scrollbar(self.decodes_container)
         self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.text_widget = tk.Text(self.decodes_container, wrap=tk.WORD, yscrollcommand=self.scrollbar.set)
         self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -80,19 +79,19 @@ class Gui:
         self.root.mainloop()
         
     def send_udp(self, msg):
-        self.sock_tx.connect(('localhost', 2122))
-        self.sock_tx.send(json.dumps(msg).encode('utf-8'))
+        self.sock_out.connect(('localhost', SOCK_GUI_OUT))
+        self.sock_out.send(json.dumps(msg).encode('utf-8'))
 
     def monitor_udp(self):
         while True:
             time.sleep(0.1)
-            rx_bytes, addres = self.sock.recvfrom(1024)
+            rx_bytes, _ = self.sock_in.recvfrom(1024)
             if rx_bytes:
-                self.decode_queue.put(json.loads(rx_bytes.decode('utf-8')))
+                self.udp_in.put(json.loads(rx_bytes.decode('utf-8')))
                 self.root.after(0, lambda: self.root.event_generate("<<received_udp>>"))
 
     def received_udp(self, e):
-        msg_dict = self.decode_queue.get()
+        msg_dict = self.udp_in.get()
         display_text = ''
         if msg_dict['mtype'] == 'decode':
             self.current_decodes.append(msg_dict)
@@ -121,11 +120,13 @@ class Gui:
         if self.waterfall_vals is None:
             self.waterfall_vals = self.waterfall_new_vals
         if self.waterfall_vals is not None:
-            self.waterfall_vals = [(self.waterfall_vals[i] + self.waterfall_new_vals[i]) / 2 for i in range(len(self.waterfall_new_vals))]
-            dw = 500/len(self.waterfall_vals)
+            n = len(self.waterfall_vals)
+            v, nv = self.waterfall_vals, self.waterfall_new_vals
+            self.waterfall_vals = [(5*v[i] + nv[i]) / 6 for i in range(n)]
+            dw = 500/n
             xys = [(i*dw, v) for i,v in enumerate(self.waterfall_vals)]
             self.waterfall_canvas.coords(self.waterfall_line, xys)
-        self.waterfall_canvas.after(250, self.update_waterfall)
+        self.waterfall_canvas.after(500, self.update_waterfall)
 
     def row_click(self, e):
         global their_snr
