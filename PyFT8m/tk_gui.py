@@ -1,44 +1,73 @@
 import tkinter as tk
-import time, threading, socket, queue, json
+import time, threading, socket, queue, json, os, sys
 import numpy as np
 
-myCall, myGrid = "G1OJS", "IO90"
+class Settings:
+    def __init__(self, config_location):
+        self.root = tk.Tk()
+        self.root.protocol("WM_DELETE_WINDOW", self._iconify)
+        self.cfg_file = config_location
+        self.cfg_vars = {'my_call':tk.StringVar(),'my_grid':tk.StringVar()}
+        self.cfg_labels = {'my_call':'My call','my_grid':'My grid'}
+        self.cfg_var_entries = []
+        for cfg_var in self.cfg_vars:
+            self.cfg_var_entries.append(self._labelled_entry(self.root, cfg_var))
+        for widg in self.cfg_var_entries:
+            widg.pack(side = 'left')
+        self._load()
+        self._iconify()
 
-their_snr = None
-in_qso_with = ''
+    def _labelled_entry(self, parent, cfg_var):
+        frm = tk.Frame(parent)
+        self.ent = tk.Entry(frm, textvariable = self.cfg_vars[cfg_var])
+        label_text = self.cfg_labels[cfg_var] if cfg_var in self.cfg_labels else cfg_var
+        tk.Label(frm, text = label_text).pack(side = 'left')
+        self.ent.pack(side = 'left')
+        self.ent.delete('0', 'end')
+        self.ent.insert('0', self.cfg_vars[cfg_var].get())
+        return frm
 
-def determine_reply(rx_message):
-    global their_snr, in_qso_with
-    hail, their_call, grid_rpt = rx_message.split(' ')
-    in_qso_with = their_call
-    if hail.startswith("CQ"):
-        reply = f"{their_call} {myCall} {myGrid[:4]}"   
-    elif hail.startswith(myCall):
-        reply = f"{their_call} {myCall} {their_snr}"
-        if any([m for m in ['+','-'] if m in grid_rpt]):
-            reply = f"{their_call} {myCall} R{their_snr}"
-        if any([m for m in ['R+','R-','RRR'] if m in grid_rpt]):
-            reply = f"{their_call} {myCall} RR73"
-        if grid_rpt == 'RR73':
-            reply = f"{their_call} {myCall} 73"
-            in_qso_with = ''
-    return reply
+    def get(self, cfg_var):
+        return self.cfg_vars[cfg_var].get()
+
+    def open(self):
+        self.root.deiconify()
+
+    def _iconify(self):
+        self._save()
+        self.root.iconify()
+
+    def _save(self):
+        cfg_dict = {k: v.get() for k, v in self.cfg_vars.items()}
+        with open(self.cfg_file, 'w') as f:
+            json.dump(cfg_dict, f)
+
+    def _load(self):
+        if os.path.exists(self.cfg_file):
+            with open(self.cfg_file, 'r') as f:
+                cfg_dict = json.load(f)
+            for k in cfg_dict:
+                if k in self.cfg_vars:
+                    self.cfg_vars[k].set(cfg_dict[k])
 
 class Gui:
-    def __init__(self, sock_gui_cmd = 2122, sock_rcvr_out = 2121):
+    def __init__(self, sock_gui_cmd = 2122, sock_rcvr_out = 2121, config_location = ''):
         self.sock_gui_cmd = sock_gui_cmd
+        self.settings = Settings(config_location)
         self.call_hashes = {}
         self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock_in.bind(('', sock_rcvr_out))
         self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_in = queue.Queue()
         self.root = tk.Tk()
+        self.root.protocol("WM_DELETE_WINDOW", self._graceful_exit)
         self.app_container = tk.Frame(self.root)
 
         self.sidebar_container = tk.Frame(self.app_container, height = 500, width = 100)
         self.sidebar_container.pack(side = 'left', fill = 'y')
         self.buttons = []
         bc = self.sidebar_container
+        self.buttons.append(tk.Button(bc, text = 'Settings', command = self.open_settings))
         self.buttons.append(tk.Button(bc, text = 'CQ', command = self.call_cq))
         for btn in self.buttons:
             btn.pack(side = 'top', anchor = 'n')
@@ -70,24 +99,36 @@ class Gui:
         self.app_container.pack(side = 'top')
         self.decodes_container.pack(side = 'top')
 
+        self.shutdown = False
         self.current_decodes = []
         self.root.bind("<<received_udp>>", self.received_udp)
         threading.Thread(target = self.monitor_udp, daemon = True).start()
         self.text_widget.insert(tk.END, f"PyFT8m\n", 'info')
         self.update_waterfall()
+        self.init_qso_vars()
         self.root.mainloop()
+
+    def _graceful_exit(self):
+        self.shutdown = True
+        self.sock_out.close()
+        self.root.destroy()
+        sys.exit(1)
+
+    def open_settings(self):
+        self.settings.open()
         
     def send_udp(self, msg):
         self.sock_out.connect(('localhost', self.sock_gui_cmd))
         self.sock_out.send(json.dumps(msg).encode('utf-8'))
 
     def monitor_udp(self):
-        while True:
+        while not self.shutdown:
             time.sleep(0.1)
             rx_bytes, _ = self.sock_in.recvfrom(1024)
-            if rx_bytes:
+            if rx_bytes and not self.shutdown:
                 self.udp_in.put(json.loads(rx_bytes.decode('utf-8')))
                 self.root.after(0, lambda: self.root.event_generate("<<received_udp>>"))
+        self.sock_in.close()
 
     def received_udp(self, e):
         msg_dict = self.udp_in.get()
@@ -95,10 +136,10 @@ class Gui:
         if msg_dict['mtype'] == 'decode':
             self.current_decodes.append(msg_dict)
             their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], msg_dict['fHz'], msg_dict['dt'], msg_dict['msg_tuple'], 
-            idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(myCall) + 3 * (msg_tuple[1] == myCall)
+            idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(self.my_call) + 3 * (msg_tuple[1] == self.my_call)
             display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
             display_text = f"{their_snr:4s} {dt:5s} {fHz:6s} ~ {' '.join(msg_tuple)}"
-            if msg_tuple[1] == in_qso_with:
+            if msg_tuple[1] == self.their_call:
                 reply = determine_reply(' '.join(msg_tuple))
                 self.send_udp({'mtype':'transmit', 'message':reply})
         elif msg_dict['mtype'] == 'rollover':
@@ -127,17 +168,38 @@ class Gui:
             self.waterfall_canvas.coords(self.waterfall_line, xys)
         self.waterfall_canvas.after(500, self.update_waterfall)
 
+    def init_qso_vars(self):
+        self.their_call = ''
+        self.their_snr = -30
+        self.my_call = self.settings.get('my_call')
+        self.my_grid = self.settings.get('my_grid')
+
+    def determine_reply(self, rx_message):
+        hail, self.their_call, grid_rpt = rx_message.split(' ')
+        if hail.startswith("CQ"):
+            reply = f"{self.their_call} {self.my_call} {self.my_grid[:4]}"   
+        elif hail.startswith(my_call):
+            reply = f"{self.their_call} {self.my_call} {self.their_snr}"
+            if any([m for m in ['+','-'] if m in grid_rpt]):
+                reply = f"{self.their_call} {self.my_call} R{self.their_snr}"
+            if any([m for m in ['R+','R-','RRR'] if m in grid_rpt]):
+                reply = f"{self.their_call} {self.my_call} RR73"
+            if grid_rpt == 'RR73':
+                reply = f"{self.their_call} {self.my_call} 73"
+                self.their_call = ''
+        return reply
+
     def row_click(self, e):
-        global their_snr
         curr = e.widget.index("current").split('.')[0]
         row_txt = e.widget.get(f"{curr}.0", f"{curr}.end")
         if "~" in row_txt:
             rx_message = row_txt.split('~')[1][1:]
-            their_snr = row_txt[:3]
-            reply = determine_reply(rx_message)
+            self.their_snr = row_txt[:3]
+            reply = self.determine_reply(rx_message)
             self.send_udp({'mtype':'transmit', 'message':reply})
 
     def call_cq(self):
-        print("click")
-        self.send_udp({'mtype':'transmit', 'message':f"CQ {myCall} {myGrid}"})
+        self.send_udp({'mtype':'transmit', 'message':f"CQ {self.my_call} {self.my_grid}"})
 
+if __name__ == "__main__":
+    import PyFT8m.launch
