@@ -30,7 +30,6 @@ Homepage = "https://github.com/G1OJS/PyFT8m"
 Issues = "https://github.com/G1OJS/PyFT8m/issues"
 
 [tool.setuptools]
-packages = ["PyFT8m"]
 license-files = ["LICENSE"]
 
 [project.scripts]

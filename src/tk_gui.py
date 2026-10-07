@@ -219,8 +219,7 @@ class Gui:
 
 
 if __name__ == "__main__":
-    from PyFT8m.receiver import Receiver
-    from PyFT8m.transmitter import Transmitter
+    from PyFT8m import Receiver, Transmitter
     
     config_location = os.path.join(os.path.expanduser("~"), 'PyFT8m.cfg')
 
