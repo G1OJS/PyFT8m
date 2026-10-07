@@ -13,9 +13,6 @@ HPC = int(15 * SYM_RATE * HPS)
 T_SEARCH =  TIME_WINDOW[1]+(36+7)/SYM_RATE
 H0_RANGE = [int(SYM_RATE * HPS * t) for t in TIME_WINDOW]
 
-SOCK_RCVR_OUT = 2121
-SOCK_GUI_OUT = 2122
-
 # =============== Call hashing ========================================
 call_hashes = {}
 def add_call_hash(call):
@@ -326,13 +323,11 @@ class AudioIn:
             self.stream.start_stream()
 
     def find_device(self, device_str_contains):
-        if isinstance(device_str_contains, str):
-            device_str_contains = device_str_contains.split(',')
         pya = pyaudio.PyAudio()
         for dev_idx in range(pya.get_device_count()):
             name = pya.get_device_info_by_index(dev_idx)['name']
             match = True
-            for pattern in device_str_contains:
+            for pattern in device_str_contains.replace(' ','').split(','):
                 if (not pattern in name): match = False
             if(match):
                 return dev_idx
@@ -360,7 +355,10 @@ class AudioIn:
         return (None, pyaudio.paContinue)
 
 class Receiver:
-    def __init__(self, mic_keywords = ['Mic', 'CODEC'], max_freq = 2900, output_type = 'udp'):
+    def __init__(self, mic_keywords = ['Mic', 'CODEC'], max_freq = 2900,
+                 output_type = 'udp', latest_decode = 2, sock_rcvr_out = 2121):
+        self.latest_decode = latest_decode
+        self.sock_rcvr_out = sock_rcvr_out
         self.audio_in = AudioIn(mic_keywords, max_freq)
         self.output_type = output_type
         self.candidates = []
@@ -385,7 +383,7 @@ class Receiver:
             return
         if self.sock_out is None:
             self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock_out.connect(('localhost', SOCK_RCVR_OUT))
+        self.sock_out.connect(('localhost', self.sock_rcvr_out))
         self.sock_out.send(json.dumps(msg_dict).encode('utf-8'))
 
     def manage_cycle(self):
@@ -459,7 +457,7 @@ class Receiver:
         self.last_attempt_stop = 0
         
         def stop_decoding():
-            return 9 < time.time() % 15 < T_SEARCH
+            return self.latest_decode < time.time() % 15 < T_SEARCH
 
         def wait_for_signal(cand, last_sym = 57):
             t = time.time()

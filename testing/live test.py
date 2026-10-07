@@ -6,7 +6,7 @@ import time, pickle, threading, pyaudio, sys, queue, os, socket, json
 from PyFT8m.receiver import Receiver
 
 finished_audio = False
-PyFT8_UDP_SOCK = 2121
+RCVR_SOCK = 2121
 
 class SoundcardOut:
     def __init__(self, outputcard_keywords, wav_files):
@@ -80,7 +80,7 @@ def on_wsjtx_decode(m):
 def monitor_udp():
     global py_q
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(('', PyFT8_UDP_SOCK))
+    sock.bind(('', RCVR_SOCK))
     
     while True:
         time.sleep(0.1)
@@ -158,7 +158,7 @@ def do_test(input_device_keywords, wav_range = None):
             wav_files.append(f"{wav_folder}/test_{idx:02d}.wav")
 
     wsjtx_all_tailer = Wsjtx_all_tailer(on_wsjtx_decode, silent = False)
-    rx = Receiver(mic_keywords = input_device_keywords)
+    rx = Receiver(mic_keywords = input_device_keywords, sock_rcvr_out = RCVR_SOCK)
     threading.Thread(target = monitor_decodes, daemon = True).start()
     threading.Thread(target = monitor_udp, daemon = True).start()
     soundout = SoundcardOut("CABLE, Input", wav_files)

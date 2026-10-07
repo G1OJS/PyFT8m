@@ -3,8 +3,6 @@ import time, threading, socket, queue, json
 import numpy as np
 
 myCall, myGrid = "G1OJS", "IO90"
-SOCK_RCVR_OUT = 2121
-SOCK_GUI_OUT = 2122
 
 their_snr = None
 in_qso_with = ''
@@ -27,10 +25,11 @@ def determine_reply(rx_message):
     return reply
 
 class Gui:
-    def __init__(self):
+    def __init__(self, sock_gui_cmd = 2122, sock_rcvr_out = 2121):
+        self.sock_gui_cmd = sock_gui_cmd
         self.call_hashes = {}
         self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock_in.bind(('', SOCK_RCVR_OUT))
+        self.sock_in.bind(('', sock_rcvr_out))
         self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_in = queue.Queue()
         self.root = tk.Tk()
@@ -79,7 +78,7 @@ class Gui:
         self.root.mainloop()
         
     def send_udp(self, msg):
-        self.sock_out.connect(('localhost', SOCK_GUI_OUT))
+        self.sock_out.connect(('localhost', self.sock_gui_cmd))
         self.sock_out.send(json.dumps(msg).encode('utf-8'))
 
     def monitor_udp(self):
