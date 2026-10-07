@@ -7,13 +7,15 @@ class Settings:
         self.root = tk.Tk()
         self.root.protocol("WM_DELETE_WINDOW", self._iconify)
         self.cfg_file = config_location
-        self.cfg_vars = {'my_call':tk.StringVar(),'my_grid':tk.StringVar()}
-        self.cfg_labels = {'my_call':'My call','my_grid':'My grid'}
+        self.cfg_vars = {'my_call':tk.StringVar(),'my_grid':tk.StringVar(),
+                         'tx_keywords':tk.StringVar(),'rx_keywords':tk.StringVar()}
+        self.cfg_labels = {'my_call':'My call','my_grid':'My grid',
+                           'tx_keywords':'Sound out keywords','rx_keywords':'Sound in keywords'}
         self.cfg_var_entries = []
         for cfg_var in self.cfg_vars:
             self.cfg_var_entries.append(self._labelled_entry(self.root, cfg_var))
         for widg in self.cfg_var_entries:
-            widg.pack(side = 'left')
+            widg.pack(side = 'top')
         self._load()
         self._iconify()
 
@@ -30,7 +32,7 @@ class Settings:
     def get(self, cfg_var):
         return self.cfg_vars[cfg_var].get()
 
-    def open(self):
+    def open(self, modal = False):
         self.root.deiconify()
 
     def _iconify(self):
@@ -51,9 +53,11 @@ class Settings:
                     self.cfg_vars[k].set(cfg_dict[k])
 
 class Gui:
-    def __init__(self, sock_gui_cmd = 2122, sock_rcvr_out = 2121, config_location = ''):
+    def __init__(self, sock_gui_cmd = 2122, sock_rcvr_out = 2121, config_location = '', rx_start = None, tx_start = None):
         self.sock_gui_cmd = sock_gui_cmd
         self.settings = Settings(config_location)
+        self.rx_start = rx_start
+        self.tx_start = tx_start
         self.call_hashes = {}
         self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock_in.bind(('', sock_rcvr_out))
@@ -99,13 +103,20 @@ class Gui:
         self.app_container.pack(side = 'top')
         self.decodes_container.pack(side = 'top')
 
+        if self.settings.get('tx_keywords') == '' or self.settings.get('rx_keywords') == '':
+            self.settings.open()
+            print("Please close and re-open after editing")
+        else:
+            self.init_qso_vars()
+            self.rx_start(self.settings.get('rx_keywords'))
+            self.tx_start(self.settings.get('tx_keywords'))
+        
         self.shutdown = False
         self.current_decodes = []
         self.root.bind("<<received_udp>>", self.received_udp)
         threading.Thread(target = self.monitor_udp, daemon = True).start()
         self.text_widget.insert(tk.END, f"PyFT8m\n", 'info')
         self.update_waterfall()
-        self.init_qso_vars()
         self.root.mainloop()
 
     def _graceful_exit(self):
@@ -140,7 +151,7 @@ class Gui:
             display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
             display_text = f"{their_snr:4s} {dt:5s} {fHz:6s} ~ {' '.join(msg_tuple)}"
             if msg_tuple[1] == self.their_call:
-                reply = determine_reply(' '.join(msg_tuple))
+                reply = self.determine_reply(' '.join(msg_tuple))
                 self.send_udp({'mtype':'transmit', 'message':reply})
         elif msg_dict['mtype'] == 'rollover':
             display_type = 'info'
@@ -178,7 +189,7 @@ class Gui:
         hail, self.their_call, grid_rpt = rx_message.split(' ')
         if hail.startswith("CQ"):
             reply = f"{self.their_call} {self.my_call} {self.my_grid[:4]}"   
-        elif hail.startswith(my_call):
+        elif hail.startswith(self.my_call):
             reply = f"{self.their_call} {self.my_call} {self.their_snr}"
             if any([m for m in ['+','-'] if m in grid_rpt]):
                 reply = f"{self.their_call} {self.my_call} R{self.their_snr}"
@@ -199,7 +210,8 @@ class Gui:
             self.send_udp({'mtype':'transmit', 'message':reply})
 
     def call_cq(self):
-        self.send_udp({'mtype':'transmit', 'message':f"CQ {self.my_call} {self.my_grid}"})
+        if self.my_call and self.my_grid:
+            self.send_udp({'mtype':'transmit', 'message':f"CQ {self.my_call} {self.my_grid}"})
 
 if __name__ == "__main__":
     import PyFT8m.launch

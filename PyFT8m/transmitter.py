@@ -205,29 +205,29 @@ def append_crc(bits77_int):
 
 
 class Transmitter:
-    def __init__(self, max_tx_cycletime_start, sock_gui_cmd, outputcard_keywords):
+    def __init__(self, max_tx_cycletime_start, sock_gui_cmd):
         self.max_tx_cycletime_start = max_tx_cycletime_start
         self.tx_freq = 777
         self.tx_payload = None
         self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock_in.bind(('', sock_gui_cmd))
-        threading.Thread(target = self.transmit_daemon, daemon = True).start()
         self.output_device_index = None
         self.pya = pyaudio.PyAudio()
         self.sock_hamlib = None
-        
-        if outputcard_keywords:
-            for dev_idx in range(self.pya.get_device_count()):
-                name = self.pya.get_device_info_by_index(dev_idx)['name']
-                match = True
-                for pattern in outputcard_keywords.replace(' ','').split(','):
-                    if (not pattern in name): match = False
-                if(match):
-                    self.output_device_index = dev_idx
-                    break
-            if not self.output_device_index:
-                print(f"[Transmitter] No output audio device found matching {outputcard_keywords}")
-                sys.exit(1)
+
+    def start(self, outputcard_keywords):
+        for dev_idx in range(self.pya.get_device_count()):
+            name = self.pya.get_device_info_by_index(dev_idx)['name']
+            match = True
+            for pattern in outputcard_keywords.replace(' ','').split(','):
+                if (not pattern in name): match = False
+            if(match):
+                self.output_device_index = dev_idx
+                break
+        if not self.output_device_index:
+            print(f"[Transmitter] No output audio device found matching {outputcard_keywords}")
+            sys.exit(1)
+        threading.Thread(target = self.transmit_daemon, daemon = True).start()
 
     def init_hamlib(self, com_rig = 'COM4', com_baud = 9600, rigctld = 'C:/WSJT/wsjtx/bin/rigctld-wsjtx',
                          rig_code = 3070, hamlib_host = 'localhost', hamlib_port = 4532):

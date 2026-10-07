@@ -355,11 +355,10 @@ class AudioIn:
         return (None, pyaudio.paContinue)
 
 class Receiver:
-    def __init__(self, mic_keywords = ['Mic', 'CODEC'], max_freq = 2900,
-                 output_type = 'udp', latest_decode = 2, sock_rcvr_out = 2121):
+    def __init__(self, max_freq = 2900, output_type = 'udp', latest_decode = 2, sock_rcvr_out = 2121):
         self.latest_decode = latest_decode
+        self.max_freq = max_freq
         self.sock_rcvr_out = sock_rcvr_out
-        self.audio_in = AudioIn(mic_keywords, max_freq)
         self.output_type = output_type
         self.candidates = []
         self.duplicate_filter = []
@@ -373,6 +372,9 @@ class Receiver:
             csync[sym_idx, tone * BPT] =  1
         self.csync_flat =  csync.ravel()
         self.waterfall_max = 0
+
+    def start(self, mic_keywords):
+        self.audio_in = AudioIn(mic_keywords, self.max_freq)
         self.send_output({'mtype':'info', 'info':'Receiver starting'})
         threading.Thread(target = self.manage_cycle, daemon=True ).start()
         threading.Thread(target = self.send_waterfall_rows, daemon=True ).start()
