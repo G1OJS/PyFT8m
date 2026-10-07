@@ -208,12 +208,12 @@ class Transmitter:
     def __init__(self, max_tx_cycletime_start, sock_gui_cmd):
         self.max_tx_cycletime_start = max_tx_cycletime_start
         self.tx_freq = 777
-        self.tx_payload = None
         self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock_in.bind(('', sock_gui_cmd))
         self.output_device_index = None
         self.pya = pyaudio.PyAudio()
         self.sock_hamlib = None
+        self.audio_bytes = None
 
     def start(self, outputcard_keywords):
         for dev_idx in range(self.pya.get_device_count()):
@@ -228,6 +228,7 @@ class Transmitter:
             print(f"[Transmitter] No output audio device found matching {outputcard_keywords}")
             sys.exit(1)
         threading.Thread(target = self.transmit_daemon, daemon = True).start()
+        threading.Thread(target = self.monitor_udp, daemon = True).start()
 
     def init_hamlib(self, com_rig = 'COM4', com_baud = 9600, rigctld = 'C:/WSJT/wsjtx/bin/rigctld-wsjtx',
                          rig_code = 3070, hamlib_host = 'localhost', hamlib_port = 4532):
@@ -237,27 +238,21 @@ class Transmitter:
                 time.sleep(0.5)
             self.sock_hamlib = socket.create_connection((hamlib_host, hamlib_port))
             self._hamlib_cmd(f"M PKTUSB 0")
-                    
-    def transmit_audio_data_bytes(self, audio_data_bytes):
-        stream = self.pya.open(format=pyaudio.paInt16, channels=1, rate = SAMP_RATE, output=True,
-                          output_device_index = self.output_device_index)
-        stream.write(audio_data_bytes)
-        stream.stop_stream()
-        stream.close()
 
     def _hamlib_cmd(self, command):
         if self.sock_hamlib:
             self.sock_hamlib.sendall((command + "\n").encode())
             return self.sock_hamlib.recv(1024).decode()
+        else:
+            print(f"No rig control available")
 
     def _calc_delay(self):
         mtx = self.max_tx_cycletime_start
         ct = (time.time() - TX_T0) % 15
         delay =  0 if ct < mtx else T_CYC - ct
         return delay
-        
-    def transmit_daemon(self):
-        print("Transmitter running")
+
+    def monitor_udp(self):
         while True:
             time.sleep(0.1)
             rx_bytes, _ = self.sock_in.recvfrom(1024)
@@ -267,15 +262,28 @@ class Transmitter:
                     message = rx_dict['message']
                     if len(message.split(' ')) == 3:
                         print(f"Transmit message set to '{message}'")
-                        if self.sock_hamlib is None:
-                            print(f"No rig control initiated")
-                        else:
-                            symbols = get_ft8_symbols(message)
-                            audio_bytes = symbols_to_audio_bytes(symbols, f_base = self.tx_freq)
-                            delay = self._calc_delay()
-                            time.sleep(delay)
-                            print(f"{time.time() % 60:5.1f} transmit")
-                            self._hamlib_cmd(f"T 1")
-                            self.transmit_audio_data_bytes(audio_bytes)
-                            self._hamlib_cmd(f"T 0")
-                            self.tx_payload = None
+                        symbols = get_ft8_symbols(message)
+                        self.audio_bytes = symbols_to_audio_bytes(symbols, f_base = self.tx_freq)
+                if rx_dict['mtype'] == 'stop_transmit':
+                    print(f"Stop transmit")
+                    self._hamlib_cmd(f"T 0")
+                    self.audio_bytes = None
+        
+    def transmit_daemon(self):
+        print("Transmitter running")
+        while True:
+            time.sleep(0.1)
+            if self.audio_bytes:
+                delay = self._calc_delay()
+                time.sleep(delay)
+                print(f"{time.time() % 60:5.1f} transmit")
+                self._hamlib_cmd(f"T 1")
+                self.stream = self.pya.open(format=pyaudio.paInt16, channels=1, rate = SAMP_RATE, output=True,
+                                  output_device_index = self.output_device_index)
+                self.stream.write(self.audio_bytes)
+                self.stream.stop_stream()
+                self.stream.close()
+                self._hamlib_cmd(f"T 0")
+                self.audio_bytes = None
+
+

@@ -73,6 +73,7 @@ class Gui:
         bc = self.sidebar_container
         self.buttons.append(tk.Button(bc, text = 'Settings', command = self.open_settings))
         self.buttons.append(tk.Button(bc, text = 'CQ', command = self.call_cq))
+        self.buttons.append(tk.Button(bc, text = 'STOP', command = self.stop_transmit))
         for btn in self.buttons:
             btn.pack(side = 'top', anchor = 'n')
         
@@ -212,6 +213,10 @@ class Gui:
     def call_cq(self):
         if self.my_call and self.my_grid:
             self.send_udp({'mtype':'transmit', 'message':f"CQ {self.my_call} {self.my_grid}"})
+
+    def stop_transmit(self):
+        self.send_udp({'mtype':'stop_transmit'})
+
 
 if __name__ == "__main__":
     from PyFT8m.receiver import Receiver
