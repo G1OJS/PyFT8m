@@ -169,7 +169,7 @@ class Gui:
             display_text = ''
             self.first_decode = False
         elif msg_dict['mtype'] == 'waterfall':
-            self.waterfall_new_vals = [100 - int(v) for v in msg_dict['data'].split(',')]
+            self.waterfall_new_vals = [int(v) for v in msg_dict['data'].split(',')]
             display_text = ''
         if display_text:
             if not self.first_decode:
@@ -184,9 +184,9 @@ class Gui:
         if self.waterfall_vals is not None:
             n = len(self.waterfall_vals)
             v, nv = self.waterfall_vals, self.waterfall_new_vals
-            self.waterfall_vals = [(4*v[i] + nv[i]) / 5 for i in range(n)]
+            self.waterfall_vals = [max(0.8*v[i], nv[i]) for i in range(n)]
             dw = self.waterfall_canvas.winfo_width()/n
-            xys = [(i*dw, v) for i,v in enumerate(self.waterfall_vals)]
+            xys = [(i*dw, 100-v) for i,v in enumerate(self.waterfall_vals)]
             self.waterfall_canvas.coords(self.waterfall_line, xys)
         self.waterfall_canvas.after(250, self.update_waterfall)
 

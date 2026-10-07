@@ -410,8 +410,8 @@ class Receiver:
         while True:
             time.sleep(0.25)
             row = self.audio_in.tfgrid[0,self.audio_in.tfgrid_ptr,:]
-            self.waterfall_max = np.max([np.max(row), self.waterfall_max])
-            dBrng = 25
+            self.waterfall_max = np.max([np.max(row), 0.999 * self.waterfall_max])
+            dBrng = 35
             row = (dBrng + np.clip(row - self.waterfall_max, -dBrng, 0)) / dBrng
             row = ','.join([f"{r:.2f}"[-2:] for i, r in enumerate(row) if i % 3 == 0])
             self.send_output({'mtype':'waterfall', 'data':row}, noprint = True)
