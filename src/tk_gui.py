@@ -66,34 +66,43 @@ class Gui:
         self.udp_in = queue.Queue()
         self.root = tk.Tk()
         self.root.protocol("WM_DELETE_WINDOW", self._graceful_exit)
+        
         self.app_container = tk.Frame(self.root)
+        self.app_container.pack(side = 'top')
+        self.sidebar_container = tk.Frame(self.app_container)
+        self.sidebar_container.pack(side = 'left', fill = 'both')
+        self.info_container = tk.Frame(self.app_container)
+        self.info_container.pack(side = 'top', fill = 'both')
+        self.waterfall_container = tk.Frame(self.app_container)
+        self.waterfall_container.pack(side = 'top', fill = 'both')
+        self.decodes_container = tk.Frame(self.app_container) 
+        self.decodes_container.pack(side = 'top')
 
-        self.sidebar_container = tk.Frame(self.app_container, height = 500, width = 100)
-        self.sidebar_container.pack(side = 'left', fill = 'y')
+        self.info_label = tk.Label(self.info_container, text = 'text', bg = '#707070')
+        self.info_label.pack(side = 'top', fill = 'both')
+
         self.buttons = []
         bc = self.sidebar_container
-        self.buttons.append(tk.Button(bc, text = 'Settings', command = self.open_settings))
-        self.buttons.append(tk.Button(bc, text = 'CQ', command = self.call_cq))
-        self.buttons.append(tk.Button(bc, text = 'STOP', command = self.stop_transmit))
+        self.buttons.append(tk.Button(bc, width = 10, text = 'Settings', command = self.open_settings))
+        self.buttons.append(tk.Button(bc, width = 10, text = 'CQ', command = self.call_cq))
+        self.buttons.append(tk.Button(bc, width = 10, text = 'STOP TX', command = self.stop_transmit))
         for btn in self.buttons:
             btn.pack(side = 'top', anchor = 'n')
         
-        self.waterfall_container = tk.Frame(self.app_container, height = 100, width = 500)
-        self.waterfall_canvas = tk.Canvas(self.waterfall_container, height = 100, width = 500, bg = 'pink')
-        self.waterfall_canvas.pack(side = 'top')
-        self.waterfall_line = self.waterfall_canvas.create_line(0,0,500,0, fill = 'green', width = 2)
+        self.waterfall_canvas = tk.Canvas(self.waterfall_container, height = 100, bg = '#909090')
+        self.waterfall_canvas.pack(side = 'top', fill = 'both')
+        self.waterfall_line = self.waterfall_canvas.create_line(0,0,600,0, fill = 'green', width = 2)
         self.waterfall_vals = None
         self.waterfall_new_vals = None
         
-        self.decodes_container = tk.Frame(self.app_container) 
         self.scrollbar = tk.Scrollbar(self.decodes_container)
         self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.text_widget = tk.Text(self.decodes_container, wrap=tk.WORD, yscrollcommand=self.scrollbar.set)
         self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         fontsize = 10
-        self.text_widget.tag_config('norm', foreground = 'white', background = 'blue', font=('Helvetica', fontsize))
-        self.text_widget.tag_config('info', foreground = 'black', background = 'white', font=('Helvetica', fontsize))
+        self.text_widget.tag_config('norm', foreground = 'white', background = 'blue', font=('Helvetica', fontsize, 'bold'))
+        self.text_widget.tag_config('info', foreground = 'black', background = 'white', font=('Helvetica', fontsize, 'bold'))
         self.text_widget.tag_config('cq', foreground = 'white', background = 'green', font=('Helvetica', fontsize, 'bold'))
         self.text_widget.tag_config('to_me', foreground = 'white', background = 'red', font=('Helvetica', fontsize, 'bold'))        
         self.text_widget.tag_config('from_me', foreground = 'black', background = 'yellow', font=('Helvetica', fontsize, 'bold'))
@@ -101,9 +110,8 @@ class Gui:
 
         self.scrollbar.config(command=self.text_widget.yview)
         self.first_decode = False
-        self.waterfall_container.pack(side = 'top')
-        self.app_container.pack(side = 'top')
-        self.decodes_container.pack(side = 'top')
+        
+        
 
         if self.settings.get('tx_keywords') == '' or self.settings.get('rx_keywords') == '':
             self.settings.open()
@@ -151,7 +159,7 @@ class Gui:
             their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], msg_dict['fHz'], msg_dict['dt'], msg_dict['msg_tuple'], 
             idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(self.my_call) + 3 * (msg_tuple[1] == self.my_call)
             display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
-            display_text = f"{their_snr:4s} {dt:5s} {fHz:6s} ~ {' '.join(msg_tuple)}"
+            display_text = f"{their_snr:4s} {dt:5s} {fHz:06s} ~ {' '.join(msg_tuple)}"
             if msg_tuple[1] == self.their_call:
                 reply = self.determine_reply(' '.join(msg_tuple))
                 if reply:
@@ -176,11 +184,11 @@ class Gui:
         if self.waterfall_vals is not None:
             n = len(self.waterfall_vals)
             v, nv = self.waterfall_vals, self.waterfall_new_vals
-            self.waterfall_vals = [(5*v[i] + nv[i]) / 6 for i in range(n)]
-            dw = 500/n
+            self.waterfall_vals = [(4*v[i] + nv[i]) / 5 for i in range(n)]
+            dw = self.waterfall_canvas.winfo_width()/n
             xys = [(i*dw, v) for i,v in enumerate(self.waterfall_vals)]
             self.waterfall_canvas.coords(self.waterfall_line, xys)
-        self.waterfall_canvas.after(500, self.update_waterfall)
+        self.waterfall_canvas.after(250, self.update_waterfall)
 
     def init_qso_vars(self):
         self.their_call = ''
