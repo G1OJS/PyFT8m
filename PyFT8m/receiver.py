@@ -373,8 +373,8 @@ class Receiver:
         self.csync_flat =  csync.ravel()
         self.waterfall_max = 0
 
-    def start(self, mic_keywords):
-        self.audio_in = AudioIn(mic_keywords, self.max_freq)
+    def start(self, input_keywords):
+        self.audio_in = AudioIn(input_keywords, self.max_freq)
         self.send_output({'mtype':'info', 'info':'Receiver starting'})
         threading.Thread(target = self.manage_cycle, daemon=True ).start()
         threading.Thread(target = self.send_waterfall_rows, daemon=True ).start()

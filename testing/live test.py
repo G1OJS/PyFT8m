@@ -158,7 +158,8 @@ def do_test(input_device_keywords, wav_range = None):
             wav_files.append(f"{wav_folder}/test_{idx:02d}.wav")
 
     wsjtx_all_tailer = Wsjtx_all_tailer(on_wsjtx_decode, silent = False)
-    rx = Receiver(mic_keywords = input_device_keywords, sock_rcvr_out = RCVR_SOCK)
+    rx = Receiver(sock_rcvr_out = RCVR_SOCK)
+    rx.start(input_keywords = input_device_keywords)
     threading.Thread(target = monitor_decodes, daemon = True).start()
     threading.Thread(target = monitor_udp, daemon = True).start()
     soundout = SoundcardOut("CABLE, Input", wav_files)

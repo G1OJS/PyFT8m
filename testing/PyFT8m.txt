@@ -1,9 +1,9 @@
 001(-19) 001   13.13  s= 1.29 GOOD91 t=0          dec:13.13 CQ R4HM LO43
-002(-18) 001   13.14  s= 1.27 GOOD91 t=0          dec:13.14 M0XMX RV6AFG 73
-003(-17) 001   13.14  s= 1.12 GOOD91 t=0          dec:13.14 SQ6PZL MM0IMC -06
+002(-18) 001   13.14  s= 1.26 GOOD91 t=0          dec:13.14 M0XMX RV6AFG 73
+003(-17) 001   13.14  s= 1.19 GOOD91 t=1          dec:13.14 SQ6PZL MM0IMC -06
 004(-16) 001   13.14  s= 1.03 GOOD91 t=0          dec:13.14 CQ 9A9A JN75
 005(-15) 001   13.14  s= 0.84 GOOD91 t=0          dec:13.14 <...> DL8RCH JN68
-006(-14) 001   13.14  s= 1.23 GOOD91 t=0          dec:13.14 CQ JO1COV PM95
+006(-14) 001   13.14  s= 1.22 GOOD91 t=0          dec:13.14 CQ JO1COV PM95
 007(-13) 001   13.15  s= 1.18 GOOD91 t=0          dec:13.15 UR7HN HB9BIN RR73
 008(-12) 001   13.15  s= 1.05 GOOD91 t=0          dec:13.15 CQ ON2RK JO20
 009(-11) 001   13.15  s= 1.31 GOOD91 t=0          dec:13.15 <...> LZ365BM RR73
@@ -12,9 +12,28 @@
 012(-08) 001   13.16  s= 1.12 GOOD91 t=0          dec:13.16 CT3IQ EI8GVB IO63
 013(-07) 001   13.17  s= 1.30 GOOD91 t=0          dec:13.17 OZ5VO IT9HVZ JM78
 014(-06) 001   13.19  s= 1.29 GOOD91 t=0          dec:13.19 CQ ON3JJT JO20
-015(-05) 001   14.61  s= 1.36 LDPC   t=0 its=1    dec:14.61 CQ EA5OL IM99
-016(-04) 001   14.69  s= 1.14 LDPC   t=0 its=2    dec:14.69 SV2BRA I4WQH JN54
-017(-03) 001   14.70  s= 0.90 LDPC   t=0 its=3    dec:14.70 SP9LKP F4VTS R-12
-018(-02) 001   14.72  s= 0.82 LDPC   t=0 its=8    dec:14.72 RA3TPE TA1NGE RR73
-019(-01) 001   14.82  s= 1.06 LDPC   t=0 its=6    dec:14.82 OK6LZ 2E0LDW +06
-020(+00) 001   14.96  s= 1.02 LDPC   t=0 its=4    dec:14.96 RW6PA UA3NFG 73
+015(-05) 001   14.56  s= 1.36 LDPC   t=0 its=1    dec:14.56 CQ EA5OL IM99
+016(-04) 001   14.64  s= 1.14 LDPC   t=0 its=2    dec:14.64 SV2BRA I4WQH JN54
+017(-03) 001   14.65  s= 0.90 LDPC   t=0 its=3    dec:14.65 SP9LKP F4VTS R-12
+018(-02) 001   14.67  s= 0.82 LDPC   t=0 its=8    dec:14.67 RA3TPE TA1NGE RR73
+019(-01) 001   14.76  s= 1.06 LDPC   t=0 its=6    dec:14.76 OK6LZ 2E0LDW +06
+020(+00) 001   14.92  s= 1.02 LDPC   t=0 its=4    dec:14.92 RW6PA UA3NFG 73
+021(-20) 002   28.22  s= 1.11 GOOD91 t=0          dec:13.22 TA1NGE RA3TPE 73
+022(-19) 002   28.25  s= 1.15 GOOD91 t=0          dec:13.25 2E0LDW OK6LZ R-09
+023(-18) 002   28.25  s= 1.09 GOOD91 t=0          dec:13.25 CQ IQ5PJ JN53
+024(-17) 002   28.26  s= 1.22 GOOD91 t=0          dec:13.26 <...> OR18OSB RR73
+025(-16) 002   28.26  s= 1.09 GOOD91 t=0          dec:13.26 DK3EL R8AU -16
+026(-15) 002   28.27  s= 1.24 GOOD91 t=0          dec:13.27 9A9A DJ4TM JN47
+027(-14) 002   28.27  s= 1.09 GOOD91 t=0          dec:13.27 I4WQH SV2BRA -06
+028(-13) 002   28.27  s= 0.68 GOOD91 t=0          dec:13.27 R3FO DL1KDA RR73
+029(-12) 002   28.31  s= 1.05 GOOD91 t=0          dec:13.31 <LZ365BM> UA9FGR LO87
+030(-11) 002   29.30  s= 0.96 LDPC   t=0 its=7    dec:14.30 CQ CT3IQ IM12
+031(-10) 002   29.44  s= 0.99 LDPC   t=0 its=5    dec:14.44 JO1COV IZ7NLM -11
+032(-09) 002   29.49  s= 0.89 LDPC   t=0 its=1    dec:14.49 HB9BIN UR7HN 73
+033(-08) 002   29.55  s= 1.04 LDPC   t=0 its=1    dec:14.55 CQ F6HUK JN06
+034(-07) 002   29.55  s= 0.96 LDPC   t=0 its=3    dec:14.55 CQ IZ5ILK JN63
+035(-06) 002   29.69  s= 1.09 LDPC   t=0 its=1    dec:14.69 CQ IK4LZH JN54
+036(-05) 002   29.70  s= 0.92 LDPC   t=0 its=2    dec:14.70 CQ G3ZQQ IO82
+037(-04) 002   29.70  s= 0.92 LDPC   t=0 its=3    dec:14.70 DG1BQC HB9CUZ -17
+038(-03) 002   30.00  s= 1.07 LDPC   t=0 its=1    dec: 0.00 CQ ON6UF JO10
+039(-02) 002   31.16  s= 1.01 OSD2ch t=1          dec: 1.16 CQ 4U1A JN88
