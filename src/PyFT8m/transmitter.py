@@ -203,10 +203,10 @@ def append_crc(bits77_int):
     bits91_int = (bits77_int << 14) | bits14_int
     return bits91_int, bits14_int
 
-
 class Transmitter:
-    def __init__(self, tx_cmd_port):
+    def __init__(self, tx_cmd_port, output_keywords = None):
         self.tx_freq = 777
+        self.output_keywords = output_keywords
         self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock_in.bind(('', tx_cmd_port))
         self.output_device_index = None
@@ -214,11 +214,10 @@ class Transmitter:
         self.audio_bytes = None
         self.stream = None
 
-    def start(self, outputcard_keywords):
         for dev_idx in range(self.pya.get_device_count()):
             name = self.pya.get_device_info_by_index(dev_idx)['name']
             match = True
-            for pattern in outputcard_keywords.replace(' ','').split(','):
+            for pattern in output_keywords.replace(' ','').split(','):
                 if (not pattern in name): match = False
             if(match):
                 self.output_device_index = dev_idx

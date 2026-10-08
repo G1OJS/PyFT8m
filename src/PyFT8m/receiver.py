@@ -355,8 +355,9 @@ class AudioIn:
         return (None, pyaudio.paContinue)
 
 class Receiver:
-    def __init__(self, max_freq = 2900, output_type = 'udp', latest_decode = 2, rx_msg_port = 2121):
+    def __init__(self, max_freq = 2900, output_type = 'udp', latest_decode = 2, rx_msg_port = 2121, input_keywords = None):
         self.latest_decode = latest_decode
+        self.input_keywords = input_keywords
         self.max_freq = max_freq
         self.rx_msg_port = rx_msg_port
         self.output_type = output_type
@@ -373,7 +374,6 @@ class Receiver:
         self.csync_flat =  csync.ravel()
         self.waterfall_max = 0
 
-    def start(self, input_keywords):
         self.audio_in = AudioIn(input_keywords, self.max_freq)
         self.send_output({'mtype':'info', 'info':'Receiver starting'})
         threading.Thread(target = self.manage_cycle, daemon=True ).start()
