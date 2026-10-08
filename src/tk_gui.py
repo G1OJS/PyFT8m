@@ -2,6 +2,28 @@ import tkinter as tk
 import time, threading, socket, queue, json, os, sys, psutil, subprocess
 import numpy as np
 
+class Rig:
+    def __init__(self, hamlib_port):
+        self.hamlib_port = hamlib_port
+
+    def shutdown(self):
+        self.sock_hamlib.close()
+
+    def start(self):
+        self.sock_hamlib = socket.create_connection(('localhost', self.hamlib_port))
+        time.sleep(0.1)
+        self._send_tcp("M PKTUSB 0")
+
+    def _send_tcp(self, cmd):
+        self.sock_hamlib.sendall((cmd + "\n").encode())
+
+    def start_transmit(self):
+        self._send_tcp(f"T 1")
+
+    def stop_transmit(self):
+        self._send_tcp(f"T 0")
+        
+
 class Settings:
     def __init__(self, config_location):
         self.root = tk.Tk()
@@ -54,10 +76,14 @@ class Settings:
 
 class Gui:
     def __init__(self, tx_cmd_port = 2122, rx_msg_port = 2121, pskr_uploader_msg_port = 2123, config_location = '',
+                 hamlib_port = 4532, max_tx_cycletime_start = 3, 
                  rx_start = None, tx_start = None, pskr_upload = None):
         self.tx_cmd_port = tx_cmd_port
+        self.transmit_starter = None
+        self.max_tx_cycletime_start = max_tx_cycletime_start 
         self.pskr_uploader_msg_port = pskr_uploader_msg_port
         self.settings = Settings(config_location)
+        self.rig = Rig(hamlib_port)
         self.call_hashes = {}
         
         self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -119,6 +145,7 @@ class Gui:
             rx_start(self.settings.get('rx_keywords'))
             tx_start(self.settings.get('tx_keywords'))
             pskr_upload.start(self.settings.get('my_call'), self.settings.get('my_grid'), "PyFT8m", pskr_uploader_msg_port)
+            self.rig.start()
         
         self.shutdown = False
         self.root.bind("<<received_udp>>", self.received_udp)
@@ -128,6 +155,9 @@ class Gui:
         self.root.mainloop()
 
     def _graceful_exit(self):
+        self._send_udp({'mtype':'shutdown'}, self.pskr_uploader_msg_port)
+        time.sleep(0.1)
+        self.rig.shutdown()
         self.shutdown = True
         self.sock_out.close()
         self.root.destroy()
@@ -160,8 +190,7 @@ class Gui:
             display_text = f"{their_snr:4s} {dt:5s} {fHz:7s} ~ {' '.join(msg_tuple)}"
             if msg_tuple[1] == self.their_call:
                 reply = self.determine_reply(' '.join(msg_tuple))
-                if reply:
-                    self._send_udp({'mtype':'transmit', 'message':reply}, self.tx_cmd_port)
+                self.queue_transmit(reply)
         elif msg_dict['mtype'] == 'rollover':
             display_type = 'info'
             display_text = ''
@@ -219,19 +248,39 @@ class Gui:
             rx_message = row_txt.split('~')[1][1:]
             self.their_snr = row_txt[:3]
             reply = self.determine_reply(rx_message)
-            if reply:
-                self._send_udp({'mtype':'transmit', 'message':reply}, self.tx_cmd_port)
+            self.queue_transmit(reply)
 
     def call_cq(self):
         if self.my_call and self.my_grid:
-            self._send_udp({'mtype':'transmit', 'message':f"CQ {self.my_call} {self.my_grid}"}, self.tx_cmd_port)
+            self.queue_transmit(f"CQ {self.my_call} {self.my_grid}")
+
+    def queue_transmit(self, message):
+        T_CYC, TX_T0 = 15, 0.5
+        if message:
+            mtx = self.max_tx_cycletime_start
+            ct = (time.time() - TX_T0) % T_CYC
+            delay =  0 if ct < mtx else T_CYC - ct
+            self.tx_message = message
+            self.transmit_starter = self.root.after(int(delay * 1000), self.start_transmit)
+            self.root.after(int(delay * 1000 + 12800), self.stop_transmit)
+
+    def start_transmit(self):
+        self.rig.start_transmit()
+        self._send_udp({'mtype':'transmit', 'message':self.tx_message}, self.tx_cmd_port)
+        self.transmit_starter = None
 
     def stop_transmit(self):
-        self._send_udp({'mtype':'stop_transmit'}, self.tx_cmd_port)
+        if self.transmit_starter:
+            self.root.after_cancel(self.transmit_starter)
+            print("Pending Tx cancelled")
+        else:
+            self._send_udp({'mtype':'stop_transmit'}, self.tx_cmd_port)
+            self.rig.stop_transmit()
+            print("Current Tx stopped")
 
 
 if __name__ == "__main__":
-    from PyFT8m import Receiver, Transmitter
+    from PyFT8m import Receiver, Transmitter, PSKR_upload
     
     config_location = os.path.join(os.path.expanduser("~"), 'PyFT8m.cfg')
 
@@ -239,18 +288,12 @@ if __name__ == "__main__":
     # above 4 params to go in config eventually
     if not any(['rigctld' in i.name() for i in psutil.process_iter()]):
         cmd = f"{rigctld} -m {rig_code} -r {com_rig} -s {com_baud}"
-        threading.Thread(target = subprocess.run, args = (cmd,)).start()
-            
+        threading.Thread(target = subprocess.run, args = (cmd,)).start()          
     rx = Receiver(max_freq = 2900, latest_decode = 2, rx_msg_port = 2121)
-    tx = Transmitter(max_tx_cycletime_start = 3, tx_cmd_port = 2122, hamlib_port = 4532)
-
-    pskr_upload = None
-    send_pskr_reports = True
-    if send_pskr_reports:
-        from PyFT8m import PSKR_upload
-        pskr_upload = PSKR_upload()
+    tx = Transmitter(tx_cmd_port = 2122)
+    pskr_upload = PSKR_upload()
     
     gui = Gui(tx_cmd_port = 2122, rx_msg_port = 2121, pskr_uploader_msg_port = 2123,
-              config_location = config_location, 
+              config_location = config_location, hamlib_port = 4532, max_tx_cycletime_start = 3, 
               rx_start = rx.start, tx_start = tx.start, pskr_upload = pskr_upload)
 

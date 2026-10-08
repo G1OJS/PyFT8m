@@ -56,9 +56,6 @@ class PSKR_upload:
         threading.Thread(target = self._check_for_send, daemon = True).start()
         threading.Thread(target = self._monitor_udp, args = (pskr_uploader_msg_port,), daemon = True).start()
 
-    def shutdown(self):
-        self.shutdown = True
-
     def _monitor_udp(self, pskr_uploader_msg_port):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(('', pskr_uploader_msg_port))
@@ -67,6 +64,8 @@ class PSKR_upload:
             rx_bytes, _ = sock.recvfrom(1024)
             if rx_bytes and not self.shutdown:
                 msg_dict = json.loads(rx_bytes.decode('utf-8'))
+                if msg_dict['mtype'] == 'shutdown':
+                    self.shutdown = True
                 if msg_dict['mtype'] == 'decode':
                     their_snr, fHz = int(msg_dict['their_snr']), float(msg_dict['fHz'])
                     dxcall, mode = msg_dict['msg_tuple'][1], "FT8"
@@ -74,7 +73,7 @@ class PSKR_upload:
                     freq_hz = 14074000 + fHz
                     with self.lock:
                         self.reports[dxcall] = (dxcall, freq_hz, their_snr, mode, source, (tt // 15) * 15)
-        self.sock_in.close()
+        sock.close()
 
     def _enc_str(self, s):
         b = s.encode("ascii")
