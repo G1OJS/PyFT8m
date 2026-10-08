@@ -1,6 +1,183 @@
 import tkinter as tk
-import time, threading, socket, queue, json, os, sys, psutil, subprocess
+import time, threading, socket, queue, struct, random, json, os, sys, psutil, subprocess
 import numpy as np
+import paho.mqtt.client as mqtt
+from ast import literal_eval
+
+MAX_REPORTS = 90
+
+class PSKR_MQTT_listener:
+    def __init__(self, home_square, on_spot):
+        self.home_square = home_square
+        self.on_spot = on_spot
+        client_id = "PyFT8_" + ''.join(random.choice('0123456789ABCDEF') for i in range(16))
+        mqttc = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id)
+        mqttc.on_connect = self.on_connect
+        mqttc.on_message = self.on_message
+        try:
+            mqttc.connect("mqtt.pskreporter.info", 1883, 60)
+        except:
+            print("[MQTT] connection error")
+        threading.Thread(target = mqttc.loop_forever, daemon = True).start()
+
+    def on_connect(self, client, userdata, flags, reason_code, properties):
+        #pskr/filter/v2/{band}/{mode}/{sendercall}/{receivercall}/{senderlocator}/{receiverlocator}/{sendercouniTxRxy}/{receivercouniTxRxy}
+        print(f"[MQTT] Requesting mqtt feed for {self.home_square}")
+        client.subscribe(f"pskr/filter/v2/+/FT8/+/+/{self.home_square}/#")
+        client.subscribe(f"pskr/filter/v2/+/FT8/+/+/+/{self.home_square}/#")
+
+    def on_message(self, client, userdata, msg):
+        try:
+            d = literal_eval(msg.payload.decode())
+        except:
+            return
+        self.on_spot(d)
+
+class PSKR_upload:
+    # https://pskreporter.info/pskdev.html
+    # https://pskreporter.info/cgi-bin/psk-analysis.pl
+    def __init__(self, mycall, mygrid, software):
+        self.RxInfoRecDescriptor_CallLocSoft = b"\x00\x03\x00\x24\x99\x92\x00\x03\x00\x01\x80\x02\xFF\xFF\x00\x00\x76\x8F\x80\x04\xFF\xFF\x00\x00\x76\x8F\x80\x08\xFF\xFF\x00\x00\x76\x8F\x00\x00"
+        self.SenderInfoRecDescriptor_SenderFreqSNRiMDModeSourceTime = b"\x00\x02\x00\x3C\x99\x93\x00\x07\x80\x01\xFF\xFF\x00\x00\x76\x8F\x80\x05\x00\x04\x00\x00\x76\x8F\x80\x06\x00\x01\x00\x00\x76\x8F\x80\x07\x00\x01\x00\x00\x76\x8F\x80\x0A\xFF\xFF\x00\x00\x76\x8F\x80\x0B\x00\x01\x00\x00\x76\x8F\x00\x96\x00\x04"
+        self.last_descriptors_time = 0
+        self.descriptors_sent_count = 0
+        self.last_report_time = time.time() - 300 + 60
+        self.addr = ("report.pskreporter.info", 4739)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.session_id = random.getrandbits(32)
+        self.seq = 1
+        self.reports = {}
+        rx = self._enc_str(mycall) + self._enc_str(mygrid) + self._enc_str(software)
+        self.rx_block =  self._block(b"\x99\x92", rx)
+        self.lock = threading.Lock()
+        print(f"[PSKR_upload] Spots will upload to pskreporter if Rx band is known")
+        threading.Thread(target = self._check_for_send, daemon = True).start()
+
+    def add_report(self, msg_dict):
+        if msg_dict['mtype'] == 'decode':
+            their_snr, fHz = int(msg_dict['their_snr']), float(msg_dict['fHz'])
+            dxcall, mode = msg_dict['msg_tuple'][1], "FT8"
+            source, tt = 1, int(time.time())
+            freq_hz = 14074000 + fHz
+            with self.lock:
+                self.reports[dxcall] = (dxcall, freq_hz, their_snr, mode, source, (tt // 15) * 15)
+
+    def _enc_str(self, s):
+        b = s.encode("ascii")
+        return struct.pack("B", len(b)) + b
+
+    def _block(self, block_type, payload):
+        len_with_header = len(payload) + 4
+        pad_len = (4 - (len_with_header % 4)) % 4
+        len_with_pad = len_with_header + pad_len
+        blk = block_type + struct.pack("!H", len_with_pad) + payload + b"\x00" * pad_len
+        return blk 
+
+    def _check_for_send(self):
+        while True:
+            time.sleep(60)
+            with self.lock:
+                if len(self.reports) >= MAX_REPORTS or (time.time() - self.last_report_time) > 300:
+                    if (time.time() - self.last_descriptors_time) > 3600:
+                        self.descriptors_sent_count = 0
+                        self.last_descriptors_time = time.time()
+                    self._send(includeDescriptors = (self.descriptors_sent_count <4))
+                    self.descriptors_sent_count +=1
+           
+    def _send(self, includeDescriptors = False):
+        if not self.reports:
+            return
+        tt = int(time.time())
+        ipfx_header = struct.pack("!H", 10) + b"\x00\x00" + struct.pack("!I", tt) + struct.pack("!I", self.seq) + struct.pack("!I", self.session_id)
+        header = ipfx_header
+        if includeDescriptors:
+            print(f"[pskr_upload] Packing descriptors")
+            header = header + self.RxInfoRecDescriptor_CallLocSoft + self.SenderInfoRecDescriptor_SenderFreqSNRiMDModeSourceTime
+        senders = bytearray()
+        for dxcall, freq_hz, snr, mode, source, tt in self.reports.values():
+            print(f"[pskr_upload] Packing report {dxcall}, {freq_hz}, {snr}, {mode}, {source}, {tt}")
+            sender = self._enc_str(dxcall) + struct.pack("!I", int(freq_hz)) + struct.pack("b", int(snr)) + struct.pack("b", 0) + self._enc_str(mode) + struct.pack("B", source) + struct.pack("!I", tt)
+            senders += sender
+        packet = bytearray(header + self.rx_block + self._block(b"\x99\x93", senders))
+        struct.pack_into("!H", packet, 2, len(packet))
+        self.seq += len(self.reports)
+        try:
+            self.sock.sendto(packet, self.addr)
+            txt = f"[pskr_upload] Sent packet with {len(self.reports)} reports"
+            col = 'green'
+        except:
+            txt = "[PSKR_UPLOAD] Connection error"
+            col = 'red'
+        print(txt)
+        self.reports = {}
+        self.last_report_time = time.time()
+
+class ADIF:
+    def __init__(self, logfile):
+        self.adif_log_file = logfile
+        ensure_file_exists(self.adif_log_file, header = "header <eoh>\n")
+        self.cache = self._build_cache()
+              
+    def log(self, log_dict):
+        with open(self.adif_log_file,'a') as f:
+            for k, v in log_dict.items():
+                v = str(v)
+                f.write(f"<{k}:{len(v)}>{v} ")
+            f.write(f"<eor>\n")
+        cbm = log_dict['call'] + "_" + log_dict['band'] + "_FT8"
+        tm = time_utils.time()
+        self.cache[log_dict['call']] = tm
+        self.cache[cbm] = tm
+
+    def get_worked_before_info(self, their_call):
+        wb_time = self.cache.get(their_call,'') 
+        return f"wb: {time_utils.format_duration(time_utils.time() - float(wb_time))}" if wb_time else ''
+
+    def _build_cache(self):
+        import calendar, time
+        def parse(rec, field):
+            p = rec.find(field)
+            if p<0:
+                p = rec.find(field.upper())
+            if p<0:
+                p = rec.find(field.lower())
+            if p > 0:
+                p1, p2 = rec.find(':',p), rec.find('>',p)
+                n = int(rec[p1+1:p2])
+                return rec[p2+1: p2+1+n]
+        cache = {}
+        with open(self.adif_log_file, 'r') as f:
+            for l in f.readlines():
+                if parse(l, 'mode') == "FT8":
+                    c, b, d, t = parse(l, 'call:'), parse(l, 'band'), parse(l, 'qso_date'), parse(l, 'time_on')
+                    if c and b and d and t:
+                        time_tuple = time.strptime(d+t, "%Y%m%d%H%M%S")
+                        tm = calendar.timegm(time_tuple)
+                        cache[c] = tm
+                        cache[c + "_"+b+"_FT8"] = tm
+        return cache
+
+class Rig:
+    def __init__(self, hamlib_port):
+        self.hamlib_port = hamlib_port
+
+    def shutdown(self):
+        self.sock_hamlib.close()
+
+    def start(self):
+        self.sock_hamlib = socket.create_connection(('localhost', self.hamlib_port))
+        time.sleep(0.1)
+        self._send_tcp("M PKTUSB 0")
+
+    def _send_tcp(self, cmd):
+        self.sock_hamlib.sendall((cmd + "\n").encode())
+
+    def start_transmit(self):
+        self._send_tcp(f"T 1")
+
+    def stop_transmit(self):
+        self._send_tcp(f"T 0")
+        
 
 class Settings:
     def __init__(self, config_location):
@@ -54,10 +231,12 @@ class Settings:
 
 class Gui:
     def __init__(self, tx_cmd_port = 2122, rx_msg_port = 2121, pskr_uploader_msg_port = 2123, config_location = '',
-                 rx_start = None, tx_start = None, pskr_upload = None):
+                 hamlib_port = 4532, max_tx_cycletime_start = 3, settings = None):
         self.tx_cmd_port = tx_cmd_port
-        self.pskr_uploader_msg_port = pskr_uploader_msg_port
-        self.settings = Settings(config_location)
+        self.transmit_starter = None
+        self.max_tx_cycletime_start = max_tx_cycletime_start 
+        self.settings = settings
+        self.rig = Rig(hamlib_port)
         self.call_hashes = {}
         
         self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -111,14 +290,9 @@ class Gui:
         self.scrollbar.config(command=self.text_widget.yview)
         self.first_decode = False
         
-        if self.settings.get('tx_keywords') == '' or self.settings.get('rx_keywords') == '':
-            self.settings.open()
-            print("Please close and re-open after editing")
-        else:
-            self.init_qso_vars()
-            rx_start(self.settings.get('rx_keywords'))
-            tx_start(self.settings.get('tx_keywords'))
-            pskr_upload.start(self.settings.get('my_call'), self.settings.get('my_grid'), "PyFT8m", pskr_uploader_msg_port)
+        self.init_qso_vars()
+        self.pskr_upload = PSKR_upload(self.settings.get('my_call'), self.settings.get('my_grid'), "PyFT8m")
+        self.rig.start()
         
         self.shutdown = False
         self.root.bind("<<received_udp>>", self.received_udp)
@@ -128,10 +302,11 @@ class Gui:
         self.root.mainloop()
 
     def _graceful_exit(self):
+        time.sleep(0.1)
+        self.rig.shutdown()
         self.shutdown = True
         self.sock_out.close()
         self.root.destroy()
-        sys.exit(1)
 
     def open_settings(self):
         self.settings.open()
@@ -153,15 +328,14 @@ class Gui:
         msg_dict = self.udp_in_q.get()
         display_text = ''
         if msg_dict['mtype'] == 'decode':
-            self._send_udp(msg_dict, self.pskr_uploader_msg_port)
+            self.pskr_upload.add_report(msg_dict)
             their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], f"{float(msg_dict['fHz']):07.2f}", msg_dict['dt'], msg_dict['msg_tuple']
             idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(self.my_call) + 3 * (msg_tuple[1] == self.my_call)
             display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
             display_text = f"{their_snr:4s} {dt:5s} {fHz:7s} ~ {' '.join(msg_tuple)}"
             if msg_tuple[1] == self.their_call:
                 reply = self.determine_reply(' '.join(msg_tuple))
-                if reply:
-                    self._send_udp({'mtype':'transmit', 'message':reply}, self.tx_cmd_port)
+                self.queue_transmit(reply)
         elif msg_dict['mtype'] == 'rollover':
             display_type = 'info'
             display_text = ''
@@ -219,38 +393,51 @@ class Gui:
             rx_message = row_txt.split('~')[1][1:]
             self.their_snr = row_txt[:3]
             reply = self.determine_reply(rx_message)
-            if reply:
-                self._send_udp({'mtype':'transmit', 'message':reply}, self.tx_cmd_port)
+            self.queue_transmit(reply)
 
     def call_cq(self):
         if self.my_call and self.my_grid:
-            self._send_udp({'mtype':'transmit', 'message':f"CQ {self.my_call} {self.my_grid}"}, self.tx_cmd_port)
+            self.queue_transmit(f"CQ {self.my_call} {self.my_grid}")
+
+    def queue_transmit(self, message):
+        T_CYC, TX_T0 = 15, 0.5
+        self.transmit_starter = None
+        if message:
+            mtx = self.max_tx_cycletime_start
+            ct = (time.time() - TX_T0) % T_CYC
+            delay =  0 if ct < mtx else T_CYC - ct
+            self.tx_message = message
+            self.transmit_starter = self.root.after(int(delay * 1000), self.start_transmit)
+            self.root.after(int(delay * 1000 + 13000), self.stop_transmit)
+
+    def start_transmit(self):
+        self.rig.start_transmit()
+        self._send_udp({'mtype':'transmit', 'message':self.tx_message}, self.tx_cmd_port)
+        self.transmit_starter = None
 
     def stop_transmit(self):
-        self._send_udp({'mtype':'stop_transmit'}, self.tx_cmd_port)
-
+        self.rig.stop_transmit()
+        if self.transmit_starter:
+            self.root.after_cancel(self.transmit_starter)
 
 if __name__ == "__main__":
     from PyFT8m import Receiver, Transmitter
     
     config_location = os.path.join(os.path.expanduser("~"), 'PyFT8m.cfg')
+    settings = Settings(config_location)
 
-    com_rig, com_baud, rigctld, rig_code = 'COM4',9600,'C:/WSJT/wsjtx/bin/rigctld-wsjtx', 3070
-    # above 4 params to go in config eventually
-    if not any(['rigctld' in i.name() for i in psutil.process_iter()]):
-        cmd = f"{rigctld} -m {rig_code} -r {com_rig} -s {com_baud}"
-        threading.Thread(target = subprocess.run, args = (cmd,)).start()
-            
-    rx = Receiver(max_freq = 2900, latest_decode = 2, rx_msg_port = 2121)
-    tx = Transmitter(max_tx_cycletime_start = 3, tx_cmd_port = 2122, hamlib_port = 4532)
+    if settings.get('tx_keywords') == '' or settings.get('rx_keywords') == '':
+        settings.open()
+        print("Please close and re-open after editing")
+    else:
+        com_rig, com_baud, rigctld, rig_code = 'COM4',9600,'C:/WSJT/wsjtx/bin/rigctld-wsjtx', 3070
+        # above 4 params to go in config eventually
+        if not any(['rigctld' in i.name() for i in psutil.process_iter()]):
+            cmd = f"{rigctld} -m {rig_code} -r {com_rig} -s {com_baud}"
+            threading.Thread(target = subprocess.run, args = (cmd,)).start()          
+        rx = Receiver(max_freq = 2900, latest_decode = 2, rx_msg_port = 2121, input_keywords = settings.get('rx_keywords'))
+        tx = Transmitter(tx_cmd_port = 2122, output_keywords = settings.get('tx_keywords'))
 
-    pskr_upload = None
-    send_pskr_reports = True
-    if send_pskr_reports:
-        from PyFT8m import PSKR_upload
-        pskr_upload = PSKR_upload()
-    
-    gui = Gui(tx_cmd_port = 2122, rx_msg_port = 2121, pskr_uploader_msg_port = 2123,
-              config_location = config_location, 
-              rx_start = rx.start, tx_start = tx.start, pskr_upload = pskr_upload)
+        gui = Gui(tx_cmd_port = 2122, rx_msg_port = 2121, pskr_uploader_msg_port = 2123, settings = settings,
+                  config_location = config_location, hamlib_port = 4532, max_tx_cycletime_start = 3)
 

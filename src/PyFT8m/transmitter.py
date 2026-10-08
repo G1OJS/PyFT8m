@@ -1,5 +1,5 @@
 import numpy as np
-import wave, sys, pyaudio, time, threading, socket, json, psutil, subprocess
+import wave, sys, pyaudio, time, threading, socket, json
 
 SAMP_RATE = 12000
 SYM_RATE  = 6.25
@@ -203,24 +203,21 @@ def append_crc(bits77_int):
     bits91_int = (bits77_int << 14) | bits14_int
     return bits91_int, bits14_int
 
-
 class Transmitter:
-    def __init__(self, max_tx_cycletime_start, tx_cmd_port, hamlib_port):
-        self.max_tx_cycletime_start = max_tx_cycletime_start
-        self.hamlib_port = hamlib_port
+    def __init__(self, tx_cmd_port, output_keywords = None):
         self.tx_freq = 777
+        self.output_keywords = output_keywords
         self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock_in.bind(('', tx_cmd_port))
-        self.sock_hamlib = None
         self.output_device_index = None
         self.pya = pyaudio.PyAudio()
         self.audio_bytes = None
+        self.stream = None
 
-    def start(self, outputcard_keywords):
         for dev_idx in range(self.pya.get_device_count()):
             name = self.pya.get_device_info_by_index(dev_idx)['name']
             match = True
-            for pattern in outputcard_keywords.replace(' ','').split(','):
+            for pattern in output_keywords.replace(' ','').split(','):
                 if (not pattern in name): match = False
             if(match):
                 self.output_device_index = dev_idx
@@ -228,20 +225,8 @@ class Transmitter:
         if not self.output_device_index:
             print(f"[Transmitter] No output audio device found matching {outputcard_keywords}")
             sys.exit(1)
-        self.sock_hamlib = socket.create_connection(('localhost', self.hamlib_port))
-        time.sleep(0.1)
-        self._send_hamlib("M PKTUSB 0")
         threading.Thread(target = self.transmit_daemon, daemon = True).start()
         threading.Thread(target = self.monitor_udp, daemon = True).start()
-
-    def _send_hamlib(self, cmd):
-        self.sock_hamlib.sendall((cmd + "\n").encode())
-
-    def _calc_delay(self):
-        mtx = self.max_tx_cycletime_start
-        ct = (time.time() - TX_T0) % 15
-        delay =  0 if ct < mtx else T_CYC - ct
-        return delay
 
     def monitor_udp(self):
         while True:
@@ -249,6 +234,7 @@ class Transmitter:
             rx_bytes, _ = self.sock_in.recvfrom(1024)
             if rx_bytes:
                 rx_dict = json.loads(rx_bytes.decode('utf-8'))
+                print(rx_dict)
                 if rx_dict['mtype'] == 'transmit':
                     message = rx_dict['message']
                     if len(message.split(' ')) == 3:
@@ -257,24 +243,22 @@ class Transmitter:
                         self.audio_bytes = symbols_to_audio_bytes(symbols, f_base = self.tx_freq)
                 if rx_dict['mtype'] == 'stop_transmit':
                     print(f"Stop transmit")
-                    self._send_hamlib(f"T 0")
-                    self.audio_bytes = None
+                    if self.stream:
+                        self.stream.stop_stream()
+                        self.stream.close()
+                        self.audio_bytes = None
         
     def transmit_daemon(self):
         print("Transmitter running")
         while True:
             time.sleep(0.1)
             if self.audio_bytes:
-                delay = self._calc_delay()
-                time.sleep(delay)
                 print(f"{time.time() % 60:5.1f} transmit")
-                self._send_hamlib(f"T 1")
                 self.stream = self.pya.open(format=pyaudio.paInt16, channels=1, rate = SAMP_RATE, output=True,
                                   output_device_index = self.output_device_index)
                 self.stream.write(self.audio_bytes)
                 self.stream.stop_stream()
                 self.stream.close()
-                self._send_hamlib(f"T 0")
                 self.audio_bytes = None
 
 
