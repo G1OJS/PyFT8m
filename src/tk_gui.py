@@ -245,7 +245,7 @@ class Gui:
         self.udp_in_q = queue.Queue()
 
         self.root = tk.Tk()
-        self.root.protocol("WM_DELETE_WINDOW", self._graceful_exit)
+        self.root.protocol("WM_DELETE_WINDOW", lambda: self._graceful_exit())
         self.app_container = tk.Frame(self.root)
         self.app_container.pack(side = 'top')
         self.sidebar_container = tk.Frame(self.app_container)
@@ -302,11 +302,7 @@ class Gui:
         self.root.mainloop()
 
     def _graceful_exit(self):
-        time.sleep(0.1)
-        self.rig.shutdown()
         self.shutdown = True
-        self.sock_out.close()
-        self.root.destroy()
 
     def open_settings(self):
         self.settings.open()
@@ -323,6 +319,7 @@ class Gui:
                 self.udp_in_q.put(json.loads(rx_bytes.decode('utf-8')))
                 self.root.after(0, lambda: self.root.event_generate("<<received_udp>>"))
         self.sock_in.close()
+        self.root.after(0, lambda: self.root.destroy())
 
     def received_udp(self, e):
         msg_dict = self.udp_in_q.get()
