@@ -262,7 +262,7 @@ class Gui:
             delay =  0 if ct < mtx else T_CYC - ct
             self.tx_message = message
             self.transmit_starter = self.root.after(int(delay * 1000), self.start_transmit)
-            self.root.after(int(delay * 1000 + 12800), self.stop_transmit)
+            self.root.after(int(delay * 1000 + 13000), self.stop_transmit)
 
     def start_transmit(self):
         self.rig.start_transmit()
