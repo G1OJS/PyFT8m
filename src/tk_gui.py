@@ -54,9 +54,6 @@ class PSKR_upload:
         threading.Thread(target = self._check_for_send, daemon = True).start()
 
     def add_report(self, msg_dict):
-        msg_dict = json.loads(rx_bytes.decode('utf-8'))
-        if msg_dict['mtype'] == 'shutdown':
-            self.shutdown = True
         if msg_dict['mtype'] == 'decode':
             their_snr, fHz = int(msg_dict['their_snr']), float(msg_dict['fHz'])
             dxcall, mode = msg_dict['msg_tuple'][1], "FT8"
@@ -305,13 +302,11 @@ class Gui:
         self.root.mainloop()
 
     def _graceful_exit(self):
-        self._send_udp({'mtype':'shutdown'}, self.pskr_uploader_msg_port)
         time.sleep(0.1)
         self.rig.shutdown()
         self.shutdown = True
         self.sock_out.close()
         self.root.destroy()
-        sys.exit(1)
 
     def open_settings(self):
         self.settings.open()
@@ -406,6 +401,7 @@ class Gui:
 
     def queue_transmit(self, message):
         T_CYC, TX_T0 = 15, 0.5
+        self.transmit_starter = None
         if message:
             mtx = self.max_tx_cycletime_start
             ct = (time.time() - TX_T0) % T_CYC
@@ -420,13 +416,9 @@ class Gui:
         self.transmit_starter = None
 
     def stop_transmit(self):
+        self.rig.stop_transmit()
         if self.transmit_starter:
             self.root.after_cancel(self.transmit_starter)
-            print("Pending Tx cancelled")
-        else:
-            self._send_udp({'mtype':'stop_transmit'}, self.tx_cmd_port)
-            self.rig.stop_transmit()
-            print("Current Tx stopped")
 
 if __name__ == "__main__":
     from PyFT8m import Receiver, Transmitter
