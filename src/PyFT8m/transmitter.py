@@ -205,12 +205,12 @@ def append_crc(bits77_int):
 
 
 class Transmitter:
-    def __init__(self, max_tx_cycletime_start, gui_cmd_port, hamlib_port):
+    def __init__(self, max_tx_cycletime_start, tx_cmd_port, hamlib_port):
         self.max_tx_cycletime_start = max_tx_cycletime_start
         self.hamlib_port = hamlib_port
         self.tx_freq = 777
         self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock_in.bind(('', gui_cmd_port))
+        self.sock_in.bind(('', tx_cmd_port))
         self.sock_hamlib = None
         self.output_device_index = None
         self.pya = pyaudio.PyAudio()

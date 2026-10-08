@@ -355,10 +355,10 @@ class AudioIn:
         return (None, pyaudio.paContinue)
 
 class Receiver:
-    def __init__(self, max_freq = 2900, output_type = 'udp', latest_decode = 2, rcvr_out_port = 2121):
+    def __init__(self, max_freq = 2900, output_type = 'udp', latest_decode = 2, rx_msg_port = 2121):
         self.latest_decode = latest_decode
         self.max_freq = max_freq
-        self.rcvr_out_port = rcvr_out_port
+        self.rx_msg_port = rx_msg_port
         self.output_type = output_type
         self.candidates = []
         self.duplicate_filter = []
@@ -383,7 +383,7 @@ class Receiver:
         if self.output_type == 'print' and not noprint:
             print(msg_dict)
             return
-        self._send_udp(msg_dict, self.rcvr_out_port)
+        self._send_udp(msg_dict, self.rx_msg_port)
         
     def _send_udp(self, msg, port):
         self.sock_out.connect(('localhost', port))

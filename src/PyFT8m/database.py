@@ -1,6 +1,6 @@
 import paho.mqtt.client as mqtt
 from ast import literal_eval
-import socket, struct, random
+import socket, struct, random, json
 import threading, time
 
 MAX_REPORTS = 90
@@ -35,7 +35,7 @@ class PSKR_MQTT_listener:
 class PSKR_upload:
     # https://pskreporter.info/pskdev.html
     # https://pskreporter.info/cgi-bin/psk-analysis.pl
-    def __init__(self, mycall, mygrid, software, console_print):
+    def __init__(self):
         self.RxInfoRecDescriptor_CallLocSoft = b"\x00\x03\x00\x24\x99\x92\x00\x03\x00\x01\x80\x02\xFF\xFF\x00\x00\x76\x8F\x80\x04\xFF\xFF\x00\x00\x76\x8F\x80\x08\xFF\xFF\x00\x00\x76\x8F\x00\x00"
         self.SenderInfoRecDescriptor_SenderFreqSNRiMDModeSourceTime = b"\x00\x02\x00\x3C\x99\x93\x00\x07\x80\x01\xFF\xFF\x00\x00\x76\x8F\x80\x05\x00\x04\x00\x00\x76\x8F\x80\x06\x00\x01\x00\x00\x76\x8F\x80\x07\x00\x01\x00\x00\x76\x8F\x80\x0A\xFF\xFF\x00\x00\x76\x8F\x80\x0B\x00\x01\x00\x00\x76\x8F\x00\x96\x00\x04"
         self.last_descriptors_time = 0
@@ -43,17 +43,38 @@ class PSKR_upload:
         self.last_report_time = time.time() - 300 + 60
         self.addr = ("report.pskreporter.info", 4739)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        #HOST = socket.gethostbyname(socket.gethostname())
-        #self.sock.bind((HOST, 1234))
         self.session_id = random.getrandbits(32)
         self.seq = 1
         self.reports = {}
+
+    def start(self, mycall, mygrid, software, pskr_uploader_msg_port):
+        self.shutdown = False
         rx = self._enc_str(mycall) + self._enc_str(mygrid) + self._enc_str(software)
         self.rx_block =  self._block(b"\x99\x92", rx)
-        self.console_print = console_print
         self.lock = threading.Lock()
         print(f"[PSKR_upload] Spots will upload to pskreporter if Rx band is known")
         threading.Thread(target = self._check_for_send, daemon = True).start()
+        threading.Thread(target = self._monitor_udp, args = (pskr_uploader_msg_port,), daemon = True).start()
+
+    def shutdown(self):
+        self.shutdown = True
+
+    def _monitor_udp(self, pskr_uploader_msg_port):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(('', pskr_uploader_msg_port))
+        while not self.shutdown:
+            time.sleep(0.1)
+            rx_bytes, _ = sock.recvfrom(1024)
+            if rx_bytes and not self.shutdown:
+                msg_dict = json.loads(rx_bytes.decode('utf-8'))
+                if msg_dict['mtype'] == 'decode':
+                    their_snr, fHz = int(msg_dict['their_snr']), float(msg_dict['fHz'])
+                    dxcall, mode = msg_dict['msg_tuple'][1], "FT8"
+                    source, tt = 1, int(time.time())
+                    freq_hz = 14074000 + fHz
+                    with self.lock:
+                        self.reports[dxcall] = (dxcall, freq_hz, their_snr, mode, source, (tt // 15) * 15)
+        self.sock_in.close()
 
     def _enc_str(self, s):
         b = s.encode("ascii")
@@ -65,10 +86,6 @@ class PSKR_upload:
         len_with_pad = len_with_header + pad_len
         blk = block_type + struct.pack("!H", len_with_pad) + payload + b"\x00" * pad_len
         return blk 
-
-    def add_report(self, dxcall, freq_hz, snr, mode, source, tt):
-        with self.lock:
-            self.reports[dxcall] = (dxcall, freq_hz, snr, mode, source, (tt // 15) * 15)
 
     def _check_for_send(self):
         while True:
@@ -106,7 +123,7 @@ class PSKR_upload:
             txt = "[PSKR_UPLOAD] Connection error"
             col = 'red'
         print(txt)
-        self.console_print(txt, color = col)
+        # insert udp out here for print on gui
         self.reports = {}
         self.last_report_time = time.time()
 

@@ -53,20 +53,20 @@ class Settings:
                     self.cfg_vars[k].set(cfg_dict[k])
 
 class Gui:
-    def __init__(self, gui_cmd_port = 2122, rcvr_out_port = 2121, config_location = '',
-                 rx_start = None, tx_start = None):
-        self.gui_cmd_port = gui_cmd_port
+    def __init__(self, tx_cmd_port = 2122, rx_msg_port = 2121, pskr_uploader_msg_port = 2123, config_location = '',
+                 rx_start = None, tx_start = None, pskr_upload = None):
+        self.tx_cmd_port = tx_cmd_port
+        self.pskr_uploader_msg_port = pskr_uploader_msg_port
         self.settings = Settings(config_location)
-        self.rx_start = rx_start
-        self.tx_start = tx_start
         self.call_hashes = {}
+        
         self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock_in.bind(('', rcvr_out_port))
+        self.sock_in.bind(('', rx_msg_port))
         self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp_in = queue.Queue()
+        self.udp_in_q = queue.Queue()
+
         self.root = tk.Tk()
         self.root.protocol("WM_DELETE_WINDOW", self._graceful_exit)
-        
         self.app_container = tk.Frame(self.root)
         self.app_container.pack(side = 'top')
         self.sidebar_container = tk.Frame(self.app_container)
@@ -111,18 +111,16 @@ class Gui:
         self.scrollbar.config(command=self.text_widget.yview)
         self.first_decode = False
         
-        
-
         if self.settings.get('tx_keywords') == '' or self.settings.get('rx_keywords') == '':
             self.settings.open()
             print("Please close and re-open after editing")
         else:
             self.init_qso_vars()
-            self.rx_start(self.settings.get('rx_keywords'))
-            self.tx_start(self.settings.get('tx_keywords'))
+            rx_start(self.settings.get('rx_keywords'))
+            tx_start(self.settings.get('tx_keywords'))
+            pskr_upload.start(self.settings.get('my_call'), self.settings.get('my_grid'), "PyFT8m", pskr_uploader_msg_port)
         
         self.shutdown = False
-        self.current_decodes = []
         self.root.bind("<<received_udp>>", self.received_udp)
         threading.Thread(target = self.monitor_udp, daemon = True).start()
         self.text_widget.insert(tk.END, f"PyFT8m\n", 'info')
@@ -147,23 +145,23 @@ class Gui:
             time.sleep(0.1)
             rx_bytes, _ = self.sock_in.recvfrom(1024)
             if rx_bytes and not self.shutdown:
-                self.udp_in.put(json.loads(rx_bytes.decode('utf-8')))
+                self.udp_in_q.put(json.loads(rx_bytes.decode('utf-8')))
                 self.root.after(0, lambda: self.root.event_generate("<<received_udp>>"))
         self.sock_in.close()
 
     def received_udp(self, e):
-        msg_dict = self.udp_in.get()
+        msg_dict = self.udp_in_q.get()
         display_text = ''
         if msg_dict['mtype'] == 'decode':
-            self.current_decodes.append(msg_dict)
-            their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], f"{float(msg_dict['fHz']):07.2f}", msg_dict['dt'], msg_dict['msg_tuple'], 
+            self._send_udp(msg_dict, self.pskr_uploader_msg_port)
+            their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], f"{float(msg_dict['fHz']):07.2f}", msg_dict['dt'], msg_dict['msg_tuple']
             idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(self.my_call) + 3 * (msg_tuple[1] == self.my_call)
             display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
             display_text = f"{their_snr:4s} {dt:5s} {fHz:7s} ~ {' '.join(msg_tuple)}"
             if msg_tuple[1] == self.their_call:
                 reply = self.determine_reply(' '.join(msg_tuple))
                 if reply:
-                    self._send_udp({'mtype':'transmit', 'message':reply}, self.gui_cmd_port)
+                    self._send_udp({'mtype':'transmit', 'message':reply}, self.tx_cmd_port)
         elif msg_dict['mtype'] == 'rollover':
             display_type = 'info'
             display_text = ''
@@ -222,14 +220,14 @@ class Gui:
             self.their_snr = row_txt[:3]
             reply = self.determine_reply(rx_message)
             if reply:
-                self._send_udp({'mtype':'transmit', 'message':reply}, self.gui_cmd_port)
+                self._send_udp({'mtype':'transmit', 'message':reply}, self.tx_cmd_port)
 
     def call_cq(self):
         if self.my_call and self.my_grid:
-            self._send_udp({'mtype':'transmit', 'message':f"CQ {self.my_call} {self.my_grid}"}, self.gui_cmd_port)
+            self._send_udp({'mtype':'transmit', 'message':f"CQ {self.my_call} {self.my_grid}"}, self.tx_cmd_port)
 
     def stop_transmit(self):
-        self._send_udp({'mtype':'stop_transmit'}, self.gui_cmd_port)
+        self._send_udp({'mtype':'stop_transmit'}, self.tx_cmd_port)
 
 
 if __name__ == "__main__":
@@ -243,10 +241,16 @@ if __name__ == "__main__":
         cmd = f"{rigctld} -m {rig_code} -r {com_rig} -s {com_baud}"
         threading.Thread(target = subprocess.run, args = (cmd,)).start()
             
-    rx = Receiver(max_freq = 2900, latest_decode = 2, rcvr_out_port = 2121)
-    tx = Transmitter(max_tx_cycletime_start = 3, gui_cmd_port = 2122, hamlib_port = 4532)
+    rx = Receiver(max_freq = 2900, latest_decode = 2, rx_msg_port = 2121)
+    tx = Transmitter(max_tx_cycletime_start = 3, tx_cmd_port = 2122, hamlib_port = 4532)
+
+    pskr_upload = None
+    send_pskr_reports = True
+    if send_pskr_reports:
+        from PyFT8m import PSKR_upload
+        pskr_upload = PSKR_upload()
     
-    gui = Gui(gui_cmd_port = 2122, rcvr_out_port = 2121,
+    gui = Gui(tx_cmd_port = 2122, rx_msg_port = 2121, pskr_uploader_msg_port = 2123,
               config_location = config_location, 
-              rx_start = rx.start, tx_start = tx.start)
+              rx_start = rx.start, tx_start = tx.start, pskr_upload = pskr_upload)
 
