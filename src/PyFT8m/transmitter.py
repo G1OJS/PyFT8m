@@ -230,7 +230,7 @@ class Transmitter:
         udp_monitor = UdpComms(tx_cmd_port, self.udp_received)
         
     def udp_received(self, msg_dict):
-        if msg_dict['mtype'] == 'shutdown_all':
+        if msg_dict['mtype'] == 'shutdown':
             self.running = False
         if msg_dict['mtype'] == 'transmit':
             message = msg_dict['message']

@@ -52,6 +52,9 @@ class PSKR_upload:
         self.lock = threading.Lock()
         print(f"[PSKR_upload] Spots will upload to pskreporter if Rx band is known")
 
+    def shutdown(self):
+        self.udp_comms.shutdown()
+
     def add_report(self, msg_dict):
         if msg_dict['mtype'] == 'decode':
             their_snr, fHz = int(msg_dict['their_snr']), float(msg_dict['fHz'])
@@ -296,10 +299,11 @@ class Gui:
 
     def _graceful_exit(self):
         self.rig.shutdown()
-        self.udp_comms.udp_send_dict({'mtype':'shutdown_all'}, dest_port = self.rx_cmd_port)
-        self.udp_comms.udp_send_dict({'mtype':'shutdown_all'}, dest_port = self.tx_cmd_port)
-        self.root.after(0, lambda: self.root.destroy())
-        time.sleep(0.5)
+        self.pskr_upload.shutdown()
+        self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.rx_cmd_port)
+        self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.tx_cmd_port)
+        self.udp_comms.shutdown()
+        self.root.destroy()
         sys.exit(0)
 
     def open_settings(self):
