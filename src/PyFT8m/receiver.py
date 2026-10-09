@@ -313,12 +313,12 @@ class AudioIn:
         self.fft_window = np.hanning(fft_len).astype(np.float32)
         self.tfgrid = np.ones((2, HPC, self.nFreqs), dtype = np.float32)
         self.indev = self.find_device(input_keywords)
+        self.tfgrid_ptr = 0
+        self.check_pointer()
         if self.indev:
             self.stream = pyaudio.PyAudio().open(
-                format = pyaudio.paInt16, channels=1, rate = SAMP_RATE, input = True, input_device_index = indev,
+                format = pyaudio.paInt16, channels=1, rate = SAMP_RATE, input = True, input_device_index = self.indev,
                 frames_per_buffer = samples_per_hop, stream_callback=self._callback,)
-            self.tfgrid_ptr = 0
-            self.check_pointer()
             self.stream.start_stream()
 
     def find_device(self, device_str_contains):
@@ -373,16 +373,17 @@ class Receiver:
             csync[sym_idx, tone * BPT] =  1
         self.csync_flat =  csync.ravel()
         self.waterfall_max = 0
+        self.running = True 
         self.udp_comms = UdpComms(rx_cmd_port, self.udp_received)
         self.audio_in = AudioIn(input_keywords, self.max_freq)
+        threading.Thread(target = self.manage_cycle, daemon=True ).start()
+        threading.Thread(target = self.send_waterfall_rows, daemon=True ).start()
         if self.audio_in.indev:
-            self.running = True            
             self.send_output({'mtype':'info', 'info':'Receiver starting'})
-            threading.Thread(target = self.manage_cycle, daemon=True ).start()
-            threading.Thread(target = self.send_waterfall_rows, daemon=True ).start()
         else:
             info = f"[Receiver] Couldn't find input device matching '{self.input_keywords}'"
             self.send_output({'mtype':'error', 'info':info})
+            self.running = False
 
     def send_output(self, msg_dict, noprint = False):
         if self.output_type == 'print' and not noprint:

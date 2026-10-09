@@ -251,6 +251,7 @@ class Gui:
         self.tx_cmd_port = tx_cmd_port
         self.rx_cmd_port = rx_cmd_port
         self.rig = None
+        self.running = True
         self.pskr_upload = None
         self.max_tx_cycletime_start = max_tx_cycletime_start
         self.root = tk.Tk()
@@ -260,13 +261,11 @@ class Gui:
         self.settings = Settings()
         if not self.settings.allOK():
             self.settings.show()
+       
         rx = Receiver(max_freq = 2900, latest_decode = 2, rx_msg_port = 2121,
                       input_keywords = self.settings.get('Sound in keywords'))
         tx = Transmitter(tx_cmd_port = 2122, output_keywords = self.settings.get('Sound out keywords'))
         
-        self.rig = Rig(hamlib_port)
-        self.pskr_upload = PSKR_upload(self.settings.get('My call'), self.settings.get('My grid'), "PyFT8m")
-        self.adif_log = ADIF(f"{self.settings.get('config_folder')}/PyFT8m.adi")
         
         self.app_container = tk.Frame(self.root)
         self.app_container.pack(side = 'top')
@@ -312,15 +311,19 @@ class Gui:
         self.scrollbar.config(command=self.text_widget.yview)
         self.first_decode = False
         
-        self.init_qso_vars()
-        self.text_widget.insert(tk.END, f"PyFT8m\n", 'info')
-        self.update_waterfall()
-        self.update_pskr_uploader()
-        self.dial_freq_Hz = 14074000
-        self.pending_start_tx_stream = None
-        self.pending_ptt_on = None
-        self.call_hashes = {}
-        self.root.mainloop()
+        if self.running:
+            self.pskr_upload = PSKR_upload(self.settings.get('My call'), self.settings.get('My grid'), "PyFT8m")
+            self.adif_log = ADIF(f"{self.settings.get('config_folder')}/PyFT8m.adi")
+            self.rig = Rig(hamlib_port)
+            self.init_qso_vars()
+            self.text_widget.insert(tk.END, f"PyFT8m\n", 'info')
+            self.update_waterfall()
+            self.update_pskr_uploader()
+            self.dial_freq_Hz = 14074000
+            self.pending_start_tx_stream = None
+            self.pending_ptt_on = None
+            self.call_hashes = {}
+            self.root.mainloop()
 
     def show_settings(self):
         self.settings.show()
@@ -329,13 +332,16 @@ class Gui:
         if self.rig:
             self.rig.ptt_off()
             self.rig.shutdown()
-       # if self.pskr_upload:
-        #    self.pskr_upload.shutdown()
-        self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.rx_cmd_port)
-        self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.tx_cmd_port)
-        self.udp_comms.shutdown()
+        if self.pskr_upload:
+            self.pskr_upload.shutdown()
+        if self.running:
+            self.running = False
+            self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.rx_cmd_port)
+            self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.tx_cmd_port)
+            self.udp_comms.shutdown()
+            time.sleep(0.5)
         self.root.destroy()
-        sys.exit(0)
+        sys.exit()
 
     def _process_udp_msg(self, msg_dict):
         display_text = ''
@@ -376,7 +382,8 @@ class Gui:
 
     def update_pskr_uploader(self):
         self.pskr_upload.send_reports()
-        self.root.after(60, self.update_pskr_uploader)
+        if self.running:
+            self.root.after(60, self.update_pskr_uploader)
 
     def update_waterfall(self):
         if self.waterfall_vals is None:
@@ -388,7 +395,8 @@ class Gui:
             dw = self.waterfall_canvas.winfo_width()/n
             xys = [(i*dw, 100-v) for i,v in enumerate(self.waterfall_vals)]
             self.waterfall_canvas.coords(self.waterfall_line, xys)
-        self.waterfall_canvas.after(250, self.update_waterfall)
+        if self.running:
+            self.waterfall_canvas.after(250, self.update_waterfall)
 
     def init_qso_vars(self):
         self.their_grid = ''
