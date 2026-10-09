@@ -3,6 +3,7 @@ import time, threading, struct, random, json, socket, os, sys, psutil, subproces
 import numpy as np
 import paho.mqtt.client as mqtt
 from ast import literal_eval
+from PyFT8m import Receiver, Transmitter, UdpComms
 
 MAX_REPORTS = 90
 
@@ -118,8 +119,9 @@ class ADIF:
         gmt = time.gmtime()
         band = '20m'
         log_dict = {'operator':my_call, 'station_callsign':my_call, 'my_gridsquare':my_grid, 'mode':'FT8',
-                             'time_on': time.strftime("%H%M%S", gmt), 'qso_date':time.strftime("%Y%m%d", gmt),
-                             'band':band, 'freq':int(fHz/1e6), 'call':their_call, 'rst_sent':their_snr}
+                    'time_on': time.strftime("%H%M%S", gmt), 'qso_date':time.strftime("%Y%m%d", gmt),
+                    'band':band, 'freq':int(fHz/1e6),
+                    'call':their_call, 'gridsquare': their_grid, 'rst_sent':their_snr, 'rst_rcvd':my_snr}
         with open(self.adif_log_file,'a') as f:
             for k, v in log_dict.items():
                 v = str(v)
@@ -190,47 +192,47 @@ class Rig:
         
 
 class Settings:
-    def __init__(self, config_folder):
+    def __init__(self):
         self.root = tk.Tk()
-        self.root.protocol("WM_DELETE_WINDOW", self._iconify)
-        self.cfg_file = f"{config_folder}/PyFT8m.cfg"
-        self.cfg_vars = {'config_folder':tk.StringVar(), 'my_call':tk.StringVar(),'my_grid':tk.StringVar(),
-                         'tx_keywords':tk.StringVar(),'rx_keywords':tk.StringVar()}
-        self.cfg_labels = {'config_folder':'Config folder', 'my_call':'My call','my_grid':'My grid',
-                           'tx_keywords':'Sound out keywords','rx_keywords':'Sound in keywords'}
-        self.cfg_var_entries = []
-        for cfg_var in self.cfg_vars:
-            self.cfg_var_entries.append(self._labelled_entry(self.root, cfg_var))
-        for widg in self.cfg_var_entries:
-            widg.pack(side = 'top')
+        self.root.protocol("WM_DELETE_WINDOW", self.quit)
+        self.initialise()
         self._load()
-        if self.cfg_vars['config_folder'].get() == '':
-            self.cfg_vars['config_folder'].set(config_folder)
-        self._save()
         self.root.iconify()
 
-    def _labelled_entry(self, parent, cfg_var):
-        frm = tk.Frame(parent)
-        self.ent = tk.Entry(frm, textvariable = self.cfg_vars[cfg_var])
-        label_text = self.cfg_labels[cfg_var] if cfg_var in self.cfg_labels else cfg_var
-        tk.Label(frm, text = label_text).pack(side = 'left')
-        self.ent.pack(side = 'left')
-        self.ent.delete('0', 'end')
-        self.ent.insert('0', self.cfg_vars[cfg_var].get())
-        return frm
-
-    def get(self, cfg_var):
-        return self.cfg_vars[cfg_var].get()
-
-    def open(self, modal = False):
+    def show(self):
         self.root.deiconify()
+        self.root.mainloop()
 
-    def _iconify(self):
+    def initialise(self):
+        config_folder = os.path.expanduser("~")
+        self.cfg_file = f"{config_folder}/PyFT8m.cfg"
+        cfg_items = ['My call', 'My grid', 'Sound out keywords', 'Sound in keywords']
+        self.cfg = {}
+        for cfg_item in cfg_items:
+            frm = tk.Frame(self.root)
+            var = tk.StringVar()
+            ent = tk.Entry(frm, textvariable = var)
+            lbl = tk.Label(frm, text = cfg_item)
+            lbl.pack(side = 'left')
+            ent.pack(side = 'left')
+            self.cfg[cfg_item] = var
+            frm.pack(side = 'top')
+        self.cfg['config_folder'] = tk.StringVar()
+        self.cfg['config_folder'].set(config_folder)
+
+    def get(self, cfg_item):
+        return self.cfg[cfg_item].get()
+
+    def allOK(self):
+        return all([self.cfg[s].get() for s in ['My call', 'My grid', 'Sound out keywords', 'Sound in keywords']])
+    
+    def quit(self):
         self._save()
-        self.root.iconify()
+        if self.allOK():
+            self.root.destroy()
 
     def _save(self):
-        cfg_dict = {k: v.get() for k, v in self.cfg_vars.items()}
+        cfg_dict = {k: v.get() for k, v in self.cfg.items()}
         with open(self.cfg_file, 'w') as f:
             json.dump(cfg_dict, f)
 
@@ -239,22 +241,30 @@ class Settings:
             with open(self.cfg_file, 'r') as f:
                 cfg_dict = json.load(f)
             for k in cfg_dict:
-                if k in self.cfg_vars:
-                    self.cfg_vars[k].set(cfg_dict[k])
+                if k in self.cfg:
+                    self.cfg[k].set(cfg_dict[k])
 
 class Gui:
-    def __init__(self, tx_cmd_port = 2122, rx_msg_port = 2121, rx_cmd_port = 2123, pskr_uploader_msg_port = 2123, config_folder = '',
-                 hamlib_port = 4532, max_tx_cycletime_start = 3, settings = None):
+    def __init__(self, tx_cmd_port = 2122, rx_msg_port = 2121, rx_cmd_port = 2123, pskr_uploader_msg_port = 2123,
+                 hamlib_port = 4532, max_tx_cycletime_start = 3, Receiver = None, Transmitter = None):
         self.tx_cmd_port = tx_cmd_port
         self.rx_cmd_port = rx_cmd_port
         self.transmit_starter = None
-        self.max_tx_cycletime_start = max_tx_cycletime_start 
-        self.settings = settings
+        self.max_tx_cycletime_start = max_tx_cycletime_start
+        
+        self.udp_comms = UdpComms(rx_msg_port, self._process_udp_msg)
+        self.settings = Settings()
+        if not self.settings.allOK():
+            self.settings.show()
+        rx = Receiver(max_freq = 2900, latest_decode = 2, rx_msg_port = 2121,
+                      input_keywords = self.settings.get('Sound in keywords'))
+        tx = Transmitter(tx_cmd_port = 2122, output_keywords = self.settings.get('Sound out keywords'))
         self.rig = Rig(hamlib_port)
-        self.call_hashes = {}
-
+        self.pskr_upload = PSKR_upload(self.settings.get('My call'), self.settings.get('My grid'), "PyFT8m")
+        self.adif_log = ADIF(f"{self.settings.get('config_folder')}/PyFT8m.adi")
+        
         self.root = tk.Tk()
-        self.root.protocol("WM_DELETE_WINDOW", lambda: self._graceful_exit())
+        self.root.protocol("WM_DELETE_WINDOW", lambda: self.shutdown())
         self.app_container = tk.Frame(self.root)
         self.app_container.pack(side = 'top')
         self.sidebar_container = tk.Frame(self.app_container)
@@ -271,7 +281,7 @@ class Gui:
 
         self.buttons = []
         bc = self.sidebar_container
-        self.buttons.append(tk.Button(bc, width = 10, text = 'Settings', command = self.open_settings))
+        self.buttons.append(tk.Button(bc, width = 10, text = 'Settings', command = self.show_settings))
         self.buttons.append(tk.Button(bc, width = 10, text = 'CQ', command = self.call_cq))
         self.buttons.append(tk.Button(bc, width = 10, text = 'STOP TX', command = self.stop_transmit))
         for btn in self.buttons:
@@ -300,18 +310,19 @@ class Gui:
         self.first_decode = False
         
         self.init_qso_vars()
-        self.pskr_upload = PSKR_upload(self.settings.get('my_call'), self.settings.get('my_grid'), "PyFT8m")
-        self.adif_log = ADIF(f"{settings.get('config_folder')}/PyFT8m.adi")
         self.text_widget.insert(tk.END, f"PyFT8m\n", 'info')
-        self.udp_comms = UdpComms(rx_msg_port, self._process_udp_msg)
         self.update_waterfall()
         self.update_pskr_uploader()
         self.dial_freq_Hz = 14074000
         self.pending_start_tx_stream = None
         self.pending_ptt_on = None
+        self.call_hashes = {}
         self.root.mainloop()
 
-    def _graceful_exit(self):
+    def show_settings(self):
+        self.settings.show()
+
+    def shutdown(self):
         self.rig.ptt_off()
         self.rig.shutdown()
         self.pskr_upload.shutdown()
@@ -320,9 +331,6 @@ class Gui:
         self.udp_comms.shutdown()
         self.root.destroy()
         sys.exit(0)
-
-    def open_settings(self):
-        self.settings.open()
 
     def _process_udp_msg(self, msg_dict):
         display_text = ''
@@ -379,8 +387,8 @@ class Gui:
         self.their_call = ''
         self.their_snr = -30
         self.my_snr = -30
-        self.my_call = self.settings.get('my_call')
-        self.my_grid = self.settings.get('my_grid')
+        self.my_call = self.settings.get('My call')
+        self.my_grid = self.settings.get('My grid')
 
     def determine_reply(self, rx_message):
         hail, self.their_call, grid_rpt = rx_message.split(' ')
@@ -442,18 +450,6 @@ class Gui:
         print("Transmit cancelled")
 
 if __name__ == "__main__":
-    from PyFT8m import Receiver, Transmitter, UdpComms
-    
-    config_folder = os.path.expanduser("~")
-    settings = Settings(config_folder)
-
-    if settings.get('tx_keywords') == '' or settings.get('rx_keywords') == '':
-        settings.open()
-        print("Please close and re-open after editing")
-    else:       
-        rx = Receiver(max_freq = 2900, latest_decode = 2, rx_msg_port = 2121, input_keywords = settings.get('rx_keywords'))
-        tx = Transmitter(tx_cmd_port = 2122, output_keywords = settings.get('tx_keywords'))
-
-        gui = Gui(tx_cmd_port = 2122, rx_msg_port = 2121, rx_cmd_port = 2123, pskr_uploader_msg_port = 2123, settings = settings,
-                  config_folder = config_folder, hamlib_port = 4532, max_tx_cycletime_start = 3)
+    gui = Gui(tx_cmd_port = 2122, rx_msg_port = 2121, rx_cmd_port = 2123, pskr_uploader_msg_port = 2123,
+              hamlib_port = 4532, max_tx_cycletime_start = 3, Receiver = Receiver, Transmitter = Transmitter)
 
