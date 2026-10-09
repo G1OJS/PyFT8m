@@ -55,12 +55,12 @@ class PSKR_upload:
     def shutdown(self):
         self.udp_comms.shutdown()
 
-    def add_report(self, msg_dict):
+    def add_report(self, dial_freq_Hz, msg_dict):
         if msg_dict['mtype'] == 'decode':
             their_snr, fHz = int(msg_dict['their_snr']), float(msg_dict['fHz'])
             dxcall, mode = msg_dict['msg_tuple'][1], "FT8"
             source, tt = 1, int(time.time())
-            freq_hz = 14074000 + fHz
+            freq_hz = dial_freq_Hz + fHz
             with self.lock:
                 self.reports[dxcall] = (dxcall, freq_hz, their_snr, mode, source, (tt // 15) * 15)
 
@@ -109,17 +109,25 @@ class PSKR_upload:
 class ADIF:
     def __init__(self, logfile):
         self.adif_log_file = logfile
-        ensure_file_exists(self.adif_log_file, header = "header <eoh>\n")
+        if not os.path.exists(self.adif_log_file):
+            with open(self.adif_log_file, 'w') as f:
+                f.write("header <eoh>\n")
         self.cache = self._build_cache()
               
-    def log(self, log_dict):
+    def log(self, my_call, my_grid, their_call, their_grid, their_snr, my_snr, fHz):
+        gmt = time.gmtime()
+        band = '20m'
+        log_dict = {'operator':my_call, 'station_callsign':my_call, 'my_gridsquare':my_grid, 'mode':'FT8',
+                             'time_on': time.strftime("%H%M%S", gmt), 'qso_date':time.strftime("%Y%m%d", gmt),
+                             'band':band, 'freq':int(fHz/1e6), 'call':their_call, 'rst_sent':their_snr}
         with open(self.adif_log_file,'a') as f:
             for k, v in log_dict.items():
                 v = str(v)
-                f.write(f"<{k}:{len(v)}>{v} ")
+                if len(v) > 0:
+                    f.write(f"<{k}:{len(v)}>{v} ")
             f.write(f"<eor>\n")
         cbm = log_dict['call'] + "_" + log_dict['band'] + "_FT8"
-        tm = time_utils.time()
+        tm = time.time()
         self.cache[log_dict['call']] = tm
         self.cache[cbm] = tm
 
@@ -182,13 +190,13 @@ class Rig:
         
 
 class Settings:
-    def __init__(self, config_location):
+    def __init__(self, config_folder):
         self.root = tk.Tk()
         self.root.protocol("WM_DELETE_WINDOW", self._iconify)
-        self.cfg_file = config_location
-        self.cfg_vars = {'my_call':tk.StringVar(),'my_grid':tk.StringVar(),
+        self.cfg_file = f"{config_folder}/PyFT8m.cfg"
+        self.cfg_vars = {'config_folder':tk.StringVar(), 'my_call':tk.StringVar(),'my_grid':tk.StringVar(),
                          'tx_keywords':tk.StringVar(),'rx_keywords':tk.StringVar()}
-        self.cfg_labels = {'my_call':'My call','my_grid':'My grid',
+        self.cfg_labels = {'config_folder':'Config folder', 'my_call':'My call','my_grid':'My grid',
                            'tx_keywords':'Sound out keywords','rx_keywords':'Sound in keywords'}
         self.cfg_var_entries = []
         for cfg_var in self.cfg_vars:
@@ -196,7 +204,10 @@ class Settings:
         for widg in self.cfg_var_entries:
             widg.pack(side = 'top')
         self._load()
-        self._iconify()
+        if self.cfg_vars['config_folder'].get() == '':
+            self.cfg_vars['config_folder'].set(config_folder)
+        self._save()
+        self.root.iconify()
 
     def _labelled_entry(self, parent, cfg_var):
         frm = tk.Frame(parent)
@@ -232,7 +243,7 @@ class Settings:
                     self.cfg_vars[k].set(cfg_dict[k])
 
 class Gui:
-    def __init__(self, tx_cmd_port = 2122, rx_msg_port = 2121, rx_cmd_port = 2123, pskr_uploader_msg_port = 2123, config_location = '',
+    def __init__(self, tx_cmd_port = 2122, rx_msg_port = 2121, rx_cmd_port = 2123, pskr_uploader_msg_port = 2123, config_folder = '',
                  hamlib_port = 4532, max_tx_cycletime_start = 3, settings = None):
         self.tx_cmd_port = tx_cmd_port
         self.rx_cmd_port = rx_cmd_port
@@ -290,11 +301,14 @@ class Gui:
         
         self.init_qso_vars()
         self.pskr_upload = PSKR_upload(self.settings.get('my_call'), self.settings.get('my_grid'), "PyFT8m")
-        self.tx_cmd_port
+        self.adif_log = ADIF(f"{settings.get('config_folder')}/PyFT8m.adi")
         self.text_widget.insert(tk.END, f"PyFT8m\n", 'info')
         self.udp_comms = UdpComms(rx_msg_port, self._process_udp_msg)
         self.update_waterfall()
         self.update_pskr_uploader()
+        self.dial_freq_Hz = 14074000
+        self.pending_start_tx_stream = None
+        self.pending_ptt_on = None
         self.root.mainloop()
 
     def _graceful_exit(self):
@@ -313,14 +327,23 @@ class Gui:
     def _process_udp_msg(self, msg_dict):
         display_text = ''
         if msg_dict['mtype'] == 'decode':
-            self.pskr_upload.add_report(msg_dict)
+            self.pskr_upload.add_report(self.dial_freq_Hz, msg_dict)
             their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], f"{float(msg_dict['fHz']):07.2f}", msg_dict['dt'], msg_dict['msg_tuple']
             idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(self.my_call) + 3 * (msg_tuple[1] == self.my_call)
             display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
             display_text = f"{their_snr:4s} {dt:5s} {fHz:7s} ~ {' '.join(msg_tuple)}"
             if msg_tuple[1] == self.their_call:
-                reply = self.determine_reply(' '.join(msg_tuple))
-                self.queue_transmit(reply)
+                my_reply = self.determine_reply(' '.join(msg_tuple))
+                self.queue_transmit(my_reply)
+                if len(msg_tuple) == 3:
+                    if any([m for m in ['+','-'] if m in msg_tuple[2]]): # grid_rpt == rpt
+                        self.my_snr = msg_tuple[2]
+                    if not any([m for m in ['+','-','RR','73'] if m in msg_tuple[2]]): # grid_rpt == grid
+                        self.their_grid = msg_tuple[2]
+                if "73" in my_reply:
+                    self.adif_log.log(self.my_call, self.my_grid, self.their_call, self.their_grid,
+                                      self.their_snr, self.my_snr, self.dial_freq_Hz + float(fHz))
+                    self.their_call = ''
         elif msg_dict['mtype'] == 'rollover':
             display_type = 'info'
             display_text = ''
@@ -352,8 +375,10 @@ class Gui:
         self.waterfall_canvas.after(250, self.update_waterfall)
 
     def init_qso_vars(self):
+        self.their_grid = ''
         self.their_call = ''
         self.their_snr = -30
+        self.my_snr = -30
         self.my_call = self.settings.get('my_call')
         self.my_grid = self.settings.get('my_grid')
 
@@ -367,10 +392,8 @@ class Gui:
                 reply = f"{self.their_call} {self.my_call} R{self.their_snr}"
             if any([m for m in ['R+','R-','RRR'] if m in grid_rpt]):
                 reply = f"{self.their_call} {self.my_call} RR73"
-                self.their_call = ''
             if grid_rpt == 'RR73':
                 reply = f"{self.their_call} {self.my_call} 73"
-                self.their_call = ''
         else:
             reply = ''
         return reply
@@ -390,8 +413,6 @@ class Gui:
 
     def queue_transmit(self, message):
         T_CYC, TX_T0 = 15, 0.5
-        self.pending_start_tx_stream = None
-        self.pending_ptt_on = None
         def generate_tx_audio(tx_message):
             self.udp_comms.udp_send_dict({'mtype':'generate_tx_audio', 'message':tx_message}, dest_port = self.tx_cmd_port)
         def start_tx_audio():
@@ -409,16 +430,22 @@ class Gui:
         self.udp_comms.udp_send_dict({'mtype':'stop_tx_audio'}, dest_port = self.tx_cmd_port)      
         self.rig.ptt_off()
         if self.pending_ptt_on:
-            self.root.after_cancel(self.pending_ptt_on)
+            try:
+                self.root.after_cancel(self.pending_ptt_on)
+            except:
+                pass
         if self.pending_start_tx_stream:
-            self.root.after_cancel(self.pending_start_tx_stream)
+            try:
+                self.root.after_cancel(self.pending_start_tx_stream)
+            except:
+                pass
         print("Transmit cancelled")
 
 if __name__ == "__main__":
     from PyFT8m import Receiver, Transmitter, UdpComms
     
-    config_location = os.path.join(os.path.expanduser("~"), 'PyFT8m.cfg')
-    settings = Settings(config_location)
+    config_folder = os.path.expanduser("~")
+    settings = Settings(config_folder)
 
     if settings.get('tx_keywords') == '' or settings.get('rx_keywords') == '':
         settings.open()
@@ -428,5 +455,5 @@ if __name__ == "__main__":
         tx = Transmitter(tx_cmd_port = 2122, output_keywords = settings.get('tx_keywords'))
 
         gui = Gui(tx_cmd_port = 2122, rx_msg_port = 2121, rx_cmd_port = 2123, pskr_uploader_msg_port = 2123, settings = settings,
-                  config_location = config_location, hamlib_port = 4532, max_tx_cycletime_start = 3)
+                  config_folder = config_folder, hamlib_port = 4532, max_tx_cycletime_start = 3)
 
