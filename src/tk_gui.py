@@ -199,7 +199,7 @@ class Settings:
         self._load()
         self.root.iconify()
 
-    def show(self):
+    def show(self):          
         self.root.deiconify()
         self.root.mainloop()
 
@@ -229,7 +229,8 @@ class Settings:
     def quit(self):
         self._save()
         if self.allOK():
-            self.root.destroy()
+            self.root.iconify()
+            self.root.quit()
 
     def _save(self):
         cfg_dict = {k: v.get() for k, v in self.cfg.items()}
