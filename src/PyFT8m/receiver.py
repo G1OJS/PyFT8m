@@ -386,7 +386,7 @@ class Receiver:
         if self.output_type == 'print' and not noprint:
             print(msg_dict)
             return
-        self.udp_comms.send_udp(msg_dict, self.rx_msg_port)
+        self.udp_comms.udp_send_dict(msg_dict, dest_port = self.rx_msg_port)
 
     def udp_received(self, msg_dict):
         if msg_dict['mtype'] == 'shutdown_all':

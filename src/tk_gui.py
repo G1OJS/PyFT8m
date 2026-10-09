@@ -42,8 +42,8 @@ class PSKR_upload:
         self.last_descriptors_time = 0
         self.descriptors_sent_count = 0
         self.last_report_time = time.time() - 300 + 60
+        self.udp_comms = UdpComms()
         self.addr = ("report.pskreporter.info", 4739)
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.session_id = random.getrandbits(32)
         self.seq = 1
         self.reports = {}
@@ -98,16 +98,10 @@ class PSKR_upload:
         packet = bytearray(header + self.rx_block + self._block(b"\x99\x93", senders))
         struct.pack_into("!H", packet, 2, len(packet))
         self.seq += len(self.reports)
-        try:
-            self.sock.sendto(packet, self.addr)
-            txt = f"[pskr_upload] Sent packet with {len(self.reports)} reports"
-            col = 'green'
-        except:
-            txt = "[PSKR_UPLOAD] Connection error"
-            col = 'red'
-        print(txt)
+        self.udp_comms.udp_send_bytes(packet, dest_host = self.addr[0], dest_port = self.addr[1])
         self.reports = {}
         self.last_report_time = time.time()
+        print(f"[pskr_upload] Reports sent")
 
 class ADIF:
     def __init__(self, logfile):
@@ -156,15 +150,23 @@ class ADIF:
 
 class Rig:
     def __init__(self, hamlib_port):
+        self._ensure_hamlib_running()
+        time.sleep(0.1)
         self.hamlib_port = hamlib_port
-
-    def shutdown(self):
-        self.sock_hamlib.close()
-
-    def start(self):
         self.sock_hamlib = socket.create_connection(('localhost', self.hamlib_port))
         time.sleep(0.1)
         self._send_tcp("M PKTUSB 0")
+
+    def _ensure_hamlib_running(self):
+        com_rig, com_baud, rigctld, rig_code = 'COM4',9600,'C:/WSJT/wsjtx/bin/rigctld-wsjtx', 3070
+        # above 4 params to go in config eventually
+        if not any(['rigctld' in i.name() for i in psutil.process_iter()]):
+            cmd = f"{rigctld} -m {rig_code} -r {com_rig} -s {com_baud}"
+            threading.Thread(target = subprocess.run, args = (cmd,)).start()   
+
+    def shutdown(self):
+        self.sock_hamlib.close()
+        print("Rig control is shut down")
 
     def _send_tcp(self, cmd):
         self.sock_hamlib.sendall((cmd + "\n").encode())
@@ -285,19 +287,20 @@ class Gui:
         
         self.init_qso_vars()
         self.pskr_upload = PSKR_upload(self.settings.get('my_call'), self.settings.get('my_grid'), "PyFT8m")
-        self.rig.start()
         self.tx_cmd_port
-        self.shutdown = False
         self.text_widget.insert(tk.END, f"PyFT8m\n", 'info')
         self.udp_comms = UdpComms(rx_msg_port, self._process_udp_msg)
         self.update_waterfall()
+        self.update_pskr_uploader()
         self.root.mainloop()
 
     def _graceful_exit(self):
-        self.udp_comms.send_udp({'mtype':'shutdown_all'}, self.rx_cmd_port)
-        self.udp_comms.send_udp({'mtype':'shutdown_all'}, self.tx_cmd_port)
-        self.shutdown = True
+        self.rig.shutdown()
+        self.udp_comms.udp_send_dict({'mtype':'shutdown_all'}, dest_port = self.rx_cmd_port)
+        self.udp_comms.udp_send_dict({'mtype':'shutdown_all'}, dest_port = self.tx_cmd_port)
         self.root.after(0, lambda: self.root.destroy())
+        time.sleep(0.5)
+        sys.exit(0)
 
     def open_settings(self):
         self.settings.open()
@@ -326,6 +329,10 @@ class Gui:
                 self.first_decode = True
             self.text_widget.insert(tk.END, f"{display_text}\n", display_type)
             self.text_widget.see('end')
+
+    def update_pskr_uploader(self):
+        self.pskr_upload.send_reports()
+        self.root.after(60, self.update_pskr_uploader)
 
     def update_waterfall(self):
         if self.waterfall_vals is None:
@@ -389,7 +396,7 @@ class Gui:
 
     def start_transmit(self):
         self.rig.start_transmit()
-        self.udp_comms.send_udp({'mtype':'transmit', 'message':self.tx_message}, self.tx_cmd_port)
+        self.udp_comms.udp_send_dict({'mtype':'transmit', 'message':self.tx_message}, dest_port = self.tx_cmd_port)
         self.transmit_starter = None
 
     def stop_transmit(self):
@@ -406,12 +413,7 @@ if __name__ == "__main__":
     if settings.get('tx_keywords') == '' or settings.get('rx_keywords') == '':
         settings.open()
         print("Please close and re-open after editing")
-    else:
-        com_rig, com_baud, rigctld, rig_code = 'COM4',9600,'C:/WSJT/wsjtx/bin/rigctld-wsjtx', 3070
-        # above 4 params to go in config eventually
-        if not any(['rigctld' in i.name() for i in psutil.process_iter()]):
-            cmd = f"{rigctld} -m {rig_code} -r {com_rig} -s {com_baud}"
-            threading.Thread(target = subprocess.run, args = (cmd,)).start()          
+    else:       
         rx = Receiver(max_freq = 2900, latest_decode = 2, rx_msg_port = 2121, input_keywords = settings.get('rx_keywords'))
         tx = Transmitter(tx_cmd_port = 2122, output_keywords = settings.get('tx_keywords'))
 
