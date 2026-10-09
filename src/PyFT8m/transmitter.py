@@ -244,13 +244,8 @@ class Transmitter:
             self.tx_enabled = True
         if msg_dict['mtype'] == 'stop_tx_audio':
             print(f"[Transmitter] Stop transmit audio")
-            if self.stream:
-                try:
-                    self.stream.stop_stream()
-                    self.stream.close()
-                except:
-                    pass
-                self.tx_enabled = False
+            self.tx_enabled = False
+            # can't actually cancel the audio from a different thread?
         
     def transmit_daemon(self):
         print("[Transmitter] Transmitter running")
