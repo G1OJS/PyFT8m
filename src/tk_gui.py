@@ -1,5 +1,5 @@
 import tkinter as tk
-import time, threading, socket, queue, struct, random, json, os, sys, psutil, subprocess
+import time, threading, struct, random, json, socket, os, sys, psutil, subprocess
 import numpy as np
 import paho.mqtt.client as mqtt
 from ast import literal_eval
@@ -51,7 +51,6 @@ class PSKR_upload:
         self.rx_block =  self._block(b"\x99\x92", rx)
         self.lock = threading.Lock()
         print(f"[PSKR_upload] Spots will upload to pskreporter if Rx band is known")
-        threading.Thread(target = self._check_for_send, daemon = True).start()
 
     def add_report(self, msg_dict):
         if msg_dict['mtype'] == 'decode':
@@ -73,16 +72,14 @@ class PSKR_upload:
         blk = block_type + struct.pack("!H", len_with_pad) + payload + b"\x00" * pad_len
         return blk 
 
-    def _check_for_send(self):
-        while True:
-            time.sleep(60)
-            with self.lock:
-                if len(self.reports) >= MAX_REPORTS or (time.time() - self.last_report_time) > 300:
-                    if (time.time() - self.last_descriptors_time) > 3600:
-                        self.descriptors_sent_count = 0
-                        self.last_descriptors_time = time.time()
-                    self._send(includeDescriptors = (self.descriptors_sent_count <4))
-                    self.descriptors_sent_count +=1
+    def send_reports(self):
+        with self.lock:
+            if len(self.reports) >= MAX_REPORTS or (time.time() - self.last_report_time) > 300:
+                if (time.time() - self.last_descriptors_time) > 3600:
+                    self.descriptors_sent_count = 0
+                    self.last_descriptors_time = time.time()
+                self._send(includeDescriptors = (self.descriptors_sent_count <4))
+                self.descriptors_sent_count +=1
            
     def _send(self, includeDescriptors = False):
         if not self.reports:
@@ -230,19 +227,15 @@ class Settings:
                     self.cfg_vars[k].set(cfg_dict[k])
 
 class Gui:
-    def __init__(self, tx_cmd_port = 2122, rx_msg_port = 2121, pskr_uploader_msg_port = 2123, config_location = '',
+    def __init__(self, tx_cmd_port = 2122, rx_msg_port = 2121, rx_cmd_port = 2123, pskr_uploader_msg_port = 2123, config_location = '',
                  hamlib_port = 4532, max_tx_cycletime_start = 3, settings = None):
         self.tx_cmd_port = tx_cmd_port
+        self.rx_cmd_port = rx_cmd_port
         self.transmit_starter = None
         self.max_tx_cycletime_start = max_tx_cycletime_start 
         self.settings = settings
         self.rig = Rig(hamlib_port)
         self.call_hashes = {}
-        
-        self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock_in.bind(('', rx_msg_port))
-        self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp_in_q = queue.Queue()
 
         self.root = tk.Tk()
         self.root.protocol("WM_DELETE_WINDOW", lambda: self._graceful_exit())
@@ -293,36 +286,23 @@ class Gui:
         self.init_qso_vars()
         self.pskr_upload = PSKR_upload(self.settings.get('my_call'), self.settings.get('my_grid'), "PyFT8m")
         self.rig.start()
-        
+        self.tx_cmd_port
         self.shutdown = False
-        self.root.bind("<<received_udp>>", self.received_udp)
-        threading.Thread(target = self.monitor_udp, daemon = True).start()
         self.text_widget.insert(tk.END, f"PyFT8m\n", 'info')
+        self.udp_comms = UdpComms(rx_msg_port, self._process_udp_msg)
         self.update_waterfall()
         self.root.mainloop()
 
     def _graceful_exit(self):
+        self.udp_comms.send_udp({'mtype':'shutdown_all'}, self.rx_cmd_port)
+        self.udp_comms.send_udp({'mtype':'shutdown_all'}, self.tx_cmd_port)
         self.shutdown = True
+        self.root.after(0, lambda: self.root.destroy())
 
     def open_settings(self):
         self.settings.open()
 
-    def _send_udp(self, msg, port):
-        self.sock_out.connect(('localhost', port))
-        self.sock_out.sendall(json.dumps(msg).encode('utf-8'))
-
-    def monitor_udp(self):
-        while not self.shutdown:
-            time.sleep(0.1)
-            rx_bytes, _ = self.sock_in.recvfrom(1024)
-            if rx_bytes and not self.shutdown:
-                self.udp_in_q.put(json.loads(rx_bytes.decode('utf-8')))
-                self.root.after(0, lambda: self.root.event_generate("<<received_udp>>"))
-        self.sock_in.close()
-        self.root.after(0, lambda: self.root.destroy())
-
-    def received_udp(self, e):
-        msg_dict = self.udp_in_q.get()
+    def _process_udp_msg(self, msg_dict):
         display_text = ''
         if msg_dict['mtype'] == 'decode':
             self.pskr_upload.add_report(msg_dict)
@@ -409,7 +389,7 @@ class Gui:
 
     def start_transmit(self):
         self.rig.start_transmit()
-        self._send_udp({'mtype':'transmit', 'message':self.tx_message}, self.tx_cmd_port)
+        self.udp_comms.send_udp({'mtype':'transmit', 'message':self.tx_message}, self.tx_cmd_port)
         self.transmit_starter = None
 
     def stop_transmit(self):
@@ -418,7 +398,7 @@ class Gui:
             self.root.after_cancel(self.transmit_starter)
 
 if __name__ == "__main__":
-    from PyFT8m import Receiver, Transmitter
+    from PyFT8m import Receiver, Transmitter, UdpComms
     
     config_location = os.path.join(os.path.expanduser("~"), 'PyFT8m.cfg')
     settings = Settings(config_location)
@@ -435,6 +415,6 @@ if __name__ == "__main__":
         rx = Receiver(max_freq = 2900, latest_decode = 2, rx_msg_port = 2121, input_keywords = settings.get('rx_keywords'))
         tx = Transmitter(tx_cmd_port = 2122, output_keywords = settings.get('tx_keywords'))
 
-        gui = Gui(tx_cmd_port = 2122, rx_msg_port = 2121, pskr_uploader_msg_port = 2123, settings = settings,
+        gui = Gui(tx_cmd_port = 2122, rx_msg_port = 2121, rx_cmd_port = 2123, pskr_uploader_msg_port = 2123, settings = settings,
                   config_location = config_location, hamlib_port = 4532, max_tx_cycletime_start = 3)
 

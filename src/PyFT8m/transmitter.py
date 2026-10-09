@@ -1,5 +1,6 @@
 import numpy as np
-import wave, sys, pyaudio, time, threading, socket, json
+import wave, sys, pyaudio, time, threading
+from .udp_comms import UdpComms
 
 SAMP_RATE = 12000
 SYM_RATE  = 6.25
@@ -207,8 +208,7 @@ class Transmitter:
     def __init__(self, tx_cmd_port, output_keywords = None):
         self.tx_freq = 777
         self.output_keywords = output_keywords
-        self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock_in.bind(('', tx_cmd_port))
+
         self.output_device_index = None
         self.pya = pyaudio.PyAudio()
         self.audio_bytes = None
@@ -225,32 +225,29 @@ class Transmitter:
         if not self.output_device_index:
             print(f"[Transmitter] No output audio device found matching {outputcard_keywords}")
             sys.exit(1)
+        self.running = True
         threading.Thread(target = self.transmit_daemon, daemon = True).start()
-        threading.Thread(target = self.monitor_udp, daemon = True).start()
-
-    def monitor_udp(self):
-        while True:
-            time.sleep(0.1)
-            rx_bytes, _ = self.sock_in.recvfrom(1024)
-            if rx_bytes:
-                rx_dict = json.loads(rx_bytes.decode('utf-8'))
-                print(rx_dict)
-                if rx_dict['mtype'] == 'transmit':
-                    message = rx_dict['message']
-                    if len(message.split(' ')) == 3:
-                        print(f"Transmit message set to '{message}'")
-                        symbols = get_ft8_symbols(message)
-                        self.audio_bytes = symbols_to_audio_bytes(symbols, f_base = self.tx_freq)
-                if rx_dict['mtype'] == 'stop_transmit':
-                    print(f"Stop transmit")
-                    if self.stream:
-                        self.stream.stop_stream()
-                        self.stream.close()
-                        self.audio_bytes = None
+        udp_monitor = UdpComms(tx_cmd_port, self.udp_received)
+        
+    def udp_received(self, msg_dict):
+        if msg_dict['mtype'] == 'shutdown_all':
+            self.running = False
+        if msg_dict['mtype'] == 'transmit':
+            message = msg_dict['message']
+            if len(message.split(' ')) == 3:
+                print(f"Transmit message set to '{message}'")
+                symbols = get_ft8_symbols(message)
+                self.audio_bytes = symbols_to_audio_bytes(symbols, f_base = self.tx_freq)
+        if msg_dict['mtype'] == 'stop_transmit':
+            print(f"Stop transmit")
+            if self.stream:
+                self.stream.stop_stream()
+                self.stream.close()
+                self.audio_bytes = None
         
     def transmit_daemon(self):
         print("Transmitter running")
-        while True:
+        while self.running:
             time.sleep(0.1)
             if self.audio_bytes:
                 print(f"{time.time() % 60:5.1f} transmit")
@@ -260,5 +257,6 @@ class Transmitter:
                 self.stream.stop_stream()
                 self.stream.close()
                 self.audio_bytes = None
+        print("Transmitter is shut down")
 
 

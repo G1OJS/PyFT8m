@@ -1,5 +1,6 @@
 import numpy as np
 import time, pyaudio, threading, queue, socket, json
+from .udp_comms import UdpComms
 
 HPS, BPT = 4, 2
 TIME_WINDOW = [-1.5, 3.5]
@@ -355,7 +356,7 @@ class AudioIn:
         return (None, pyaudio.paContinue)
 
 class Receiver:
-    def __init__(self, max_freq = 2900, output_type = 'udp', latest_decode = 2, rx_msg_port = 2121, input_keywords = None):
+    def __init__(self, max_freq = 2900, output_type = 'udp', latest_decode = 2, rx_msg_port = 2121, rx_cmd_port = 2123, input_keywords = None):
         self.latest_decode = latest_decode
         self.input_keywords = input_keywords
         self.max_freq = max_freq
@@ -373,6 +374,8 @@ class Receiver:
             csync[sym_idx, tone * BPT] =  1
         self.csync_flat =  csync.ravel()
         self.waterfall_max = 0
+        self.udp_comms = UdpComms(rx_cmd_port, self.udp_received)
+        self.running = True
 
         self.audio_in = AudioIn(input_keywords, self.max_freq)
         self.send_output({'mtype':'info', 'info':'Receiver starting'})
@@ -383,19 +386,17 @@ class Receiver:
         if self.output_type == 'print' and not noprint:
             print(msg_dict)
             return
-        self._send_udp(msg_dict, self.rx_msg_port)
-        
-    def _send_udp(self, msg, port):
-        self.sock_out.connect(('localhost', port))
-        if isinstance(msg, dict):
-            msg = json.dumps(msg)
-        self.sock_out.sendall(msg.encode('utf-8'))
+        self.udp_comms.send_udp(msg_dict, self.rx_msg_port)
 
+    def udp_received(self, msg_dict):
+        if msg_dict['mtype'] == 'shutdown_all':
+            self.running = False
+        
     def manage_cycle(self):
         print("Receiver running")
         cycle_searched = False
         t_cyc, t_cyc_prev = 0, 0
-        while True:
+        while self.running:
             time.sleep(0.1)
             t_cyc = time.time() % 15
             if t_cyc < t_cyc_prev:
@@ -405,9 +406,10 @@ class Receiver:
                 cycle_searched = True
                 self.search_and_decode()
             t_cyc_prev = t_cyc
+        print("Receiver is shut down")
 
     def send_waterfall_rows(self):
-        while True:
+        while self.running:
             time.sleep(0.25)
             row = self.audio_in.tfgrid[0,self.audio_in.tfgrid_ptr,:]
             self.waterfall_max = np.max([np.max(row), 0.999 * self.waterfall_max])
@@ -468,7 +470,7 @@ class Receiver:
             t = time.time()
             arriving = t < cand['abs_t0'] + self.base_payload_hops[last_sym] / (SYM_RATE * HPS)
             overwritten = t > cand['abs_t0'] + 15 + 0.16*7
-            return arriving and not overwritten and not stop_decoding()
+            return arriving and not overwritten and not stop_decoding() and self.running
 
         # good91 after message symbols arrive
         for c in self.candidates:
