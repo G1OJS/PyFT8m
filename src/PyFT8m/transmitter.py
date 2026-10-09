@@ -212,6 +212,8 @@ class Transmitter:
         self.output_device_index = None
         self.pya = pyaudio.PyAudio()
         self.audio_bytes = None
+        self.tx_enabled = False
+        self.tx_message = None
         self.stream = None
 
         for dev_idx in range(self.pya.get_device_count()):
@@ -232,31 +234,37 @@ class Transmitter:
     def udp_received(self, msg_dict):
         if msg_dict['mtype'] == 'shutdown':
             self.running = False
-        if msg_dict['mtype'] == 'transmit':
-            message = msg_dict['message']
-            if len(message.split(' ')) == 3:
-                print(f"Transmit message set to '{message}'")
-                symbols = get_ft8_symbols(message)
+        if msg_dict['mtype'] == 'generate_tx_audio':
+            self.tx_message = msg_dict['message']
+            if len(self.tx_message.split(' ')) == 3:
+                print(f"[Transmitter] Transmit message set to '{self.tx_message}'")
+                symbols = get_ft8_symbols(self.tx_message)
                 self.audio_bytes = symbols_to_audio_bytes(symbols, f_base = self.tx_freq)
-        if msg_dict['mtype'] == 'stop_transmit':
-            print(f"Stop transmit")
+        if msg_dict['mtype'] == 'send_tx_audio':
+            self.tx_enabled = True
+        if msg_dict['mtype'] == 'stop_tx_audio':
+            print(f"[Transmitter] Stop transmit audio")
             if self.stream:
-                self.stream.stop_stream()
-                self.stream.close()
-                self.audio_bytes = None
+                try:
+                    self.stream.stop_stream()
+                    self.stream.close()
+                except:
+                    pass
+                self.tx_enabled = False
         
     def transmit_daemon(self):
-        print("Transmitter running")
+        print("[Transmitter] Transmitter running")
         while self.running:
             time.sleep(0.1)
-            if self.audio_bytes:
-                print(f"{time.time() % 60:5.1f} transmit")
-                self.stream = self.pya.open(format=pyaudio.paInt16, channels=1, rate = SAMP_RATE, output=True,
-                                  output_device_index = self.output_device_index)
-                self.stream.write(self.audio_bytes)
-                self.stream.stop_stream()
-                self.stream.close()
-                self.audio_bytes = None
-        print("Transmitter is shut down")
+            if self.tx_enabled:
+                if self.audio_bytes:
+                    print(f"[Transmitter] {time.time() % 60:5.1f} transmit '{self.tx_message}'")
+                    self.stream = self.pya.open(format=pyaudio.paInt16, channels=1, rate = SAMP_RATE, output=True,
+                                      output_device_index = self.output_device_index)
+                    self.stream.write(self.audio_bytes)
+                    self.stream.stop_stream()
+                    self.stream.close()
+                self.tx_enabled = False
+        print("[Transmitter] Transmitter is shut down")
 
 

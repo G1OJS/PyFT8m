@@ -174,10 +174,10 @@ class Rig:
     def _send_tcp(self, cmd):
         self.sock_hamlib.sendall((cmd + "\n").encode())
 
-    def start_transmit(self):
+    def ptt_on(self):
         self._send_tcp(f"T 1")
 
-    def stop_transmit(self):
+    def ptt_off(self):
         self._send_tcp(f"T 0")
         
 
@@ -298,6 +298,7 @@ class Gui:
         self.root.mainloop()
 
     def _graceful_exit(self):
+        self.rig.ptt_off()
         self.rig.shutdown()
         self.pskr_upload.shutdown()
         self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.rx_cmd_port)
@@ -389,24 +390,29 @@ class Gui:
 
     def queue_transmit(self, message):
         T_CYC, TX_T0 = 15, 0.5
-        self.transmit_starter = None
+        self.pending_start_tx_stream = None
+        self.pending_ptt_on = None
+        def generate_tx_audio(tx_message):
+            self.udp_comms.udp_send_dict({'mtype':'generate_tx_audio', 'message':tx_message}, dest_port = self.tx_cmd_port)
+        def start_tx_audio():
+            self.udp_comms.udp_send_dict({'mtype':'send_tx_audio'}, dest_port = self.tx_cmd_port)        
         if message:
+            generate_tx_audio(message)
             mtx = self.max_tx_cycletime_start
             ct = (time.time() - TX_T0) % T_CYC
             delay =  0 if ct < mtx else T_CYC - ct
-            self.tx_message = message
-            self.transmit_starter = self.root.after(int(delay * 1000), self.start_transmit)
-            self.root.after(int(delay * 1000 + 13000), self.stop_transmit)
-
-    def start_transmit(self):
-        self.rig.start_transmit()
-        self.udp_comms.udp_send_dict({'mtype':'transmit', 'message':self.tx_message}, dest_port = self.tx_cmd_port)
-        self.transmit_starter = None
+            self.pending_start_tx_stream = self.root.after(int(delay * 1000), start_tx_audio)
+            self.pending_ptt_on = self.root.after(int(delay * 1000), self.rig.ptt_on)
+            self.root.after(int(delay * 1000 + 13000), self.rig.ptt_off)
 
     def stop_transmit(self):
-        self.rig.stop_transmit()
-        if self.transmit_starter:
-            self.root.after_cancel(self.transmit_starter)
+        self.udp_comms.udp_send_dict({'mtype':'stop_tx_audio'}, dest_port = self.tx_cmd_port)      
+        self.rig.ptt_off()
+        if self.pending_ptt_on:
+            self.root.after_cancel(self.pending_ptt_on)
+        if self.pending_start_tx_stream:
+            self.root.after_cancel(self.pending_start_tx_stream)
+        print("Transmit cancelled")
 
 if __name__ == "__main__":
     from PyFT8m import Receiver, Transmitter, UdpComms
