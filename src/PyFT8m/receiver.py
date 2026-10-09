@@ -302,7 +302,7 @@ def osd(llr_pack):
 
 #============== AUDIO ========================================================
 class AudioIn:
-    def __init__(self, input_device_keywords, max_freq):
+    def __init__(self, input_keywords, max_freq):
         samples_per_hop = int(SAMP_RATE / (SYM_RATE * HPS))
         self.samples_per_half_hop = int(samples_per_hop / 2)
         fft_len = int(BPT * SAMP_RATE // SYM_RATE)
@@ -312,10 +312,8 @@ class AudioIn:
         self.fft_in = np.zeros(fft_len, dtype=np.float32)
         self.fft_window = np.hanning(fft_len).astype(np.float32)
         self.tfgrid = np.ones((2, HPC, self.nFreqs), dtype = np.float32)
-        indev = self.find_device(input_device_keywords)
-        if indev is None:
-            print("Couldn't find input device")
-        else:
+        self.indev = self.find_device(input_keywords)
+        if self.indev:
             self.stream = pyaudio.PyAudio().open(
                 format = pyaudio.paInt16, channels=1, rate = SAMP_RATE, input = True, input_device_index = indev,
                 frames_per_buffer = samples_per_hop, stream_callback=self._callback,)
@@ -356,7 +354,8 @@ class AudioIn:
         return (None, pyaudio.paContinue)
 
 class Receiver:
-    def __init__(self, max_freq = 2900, output_type = 'udp', latest_decode = 2, rx_msg_port = 2121, rx_cmd_port = 2123, input_keywords = None):
+    def __init__(self, max_freq = 2900, output_type = 'udp', latest_decode = 2,
+                 rx_msg_port = 2121, rx_cmd_port = 2123, input_keywords = None):
         self.latest_decode = latest_decode
         self.input_keywords = input_keywords
         self.max_freq = max_freq
@@ -375,12 +374,15 @@ class Receiver:
         self.csync_flat =  csync.ravel()
         self.waterfall_max = 0
         self.udp_comms = UdpComms(rx_cmd_port, self.udp_received)
-        self.running = True
-
         self.audio_in = AudioIn(input_keywords, self.max_freq)
-        self.send_output({'mtype':'info', 'info':'Receiver starting'})
-        threading.Thread(target = self.manage_cycle, daemon=True ).start()
-        threading.Thread(target = self.send_waterfall_rows, daemon=True ).start()
+        if self.audio_in.indev:
+            self.running = True            
+            self.send_output({'mtype':'info', 'info':'Receiver starting'})
+            threading.Thread(target = self.manage_cycle, daemon=True ).start()
+            threading.Thread(target = self.send_waterfall_rows, daemon=True ).start()
+        else:
+            info = f"[Receiver] Couldn't find input device matching '{self.input_keywords}'"
+            self.send_output({'mtype':'error', 'info':info})
 
     def send_output(self, msg_dict, noprint = False):
         if self.output_type == 'print' and not noprint:

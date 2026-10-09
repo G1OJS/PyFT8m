@@ -224,12 +224,14 @@ class Transmitter:
             if(match):
                 self.output_device_index = dev_idx
                 break
+            
+        udp_comms = UdpComms(tx_cmd_port, self.udp_received)
         if not self.output_device_index:
-            print(f"[Transmitter] No output audio device found matching {outputcard_keywords}")
-            sys.exit(1)
-        self.running = True
-        threading.Thread(target = self.transmit_daemon, daemon = True).start()
-        udp_monitor = UdpComms(tx_cmd_port, self.udp_received)
+            info = f"[Transmitter] No output audio device found matching {output_keywords}"
+            udp_comms.udp_send_dict({'mtype':'error', 'info':info}, dest_port = 2121)
+        else:
+            self.running = True
+            threading.Thread(target = self.transmit_daemon, daemon = True).start()
         
     def udp_received(self, msg_dict):
         if msg_dict['mtype'] == 'shutdown':

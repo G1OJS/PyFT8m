@@ -250,8 +250,11 @@ class Gui:
                  hamlib_port = 4532, max_tx_cycletime_start = 3, Receiver = None, Transmitter = None):
         self.tx_cmd_port = tx_cmd_port
         self.rx_cmd_port = rx_cmd_port
-        self.transmit_starter = None
+        self.rig = None
+        self.pskr_upload = None
         self.max_tx_cycletime_start = max_tx_cycletime_start
+        self.root = tk.Tk()
+        self.root.protocol("WM_DELETE_WINDOW", lambda: self.shutdown())
         
         self.udp_comms = UdpComms(rx_msg_port, self._process_udp_msg)
         self.settings = Settings()
@@ -260,12 +263,11 @@ class Gui:
         rx = Receiver(max_freq = 2900, latest_decode = 2, rx_msg_port = 2121,
                       input_keywords = self.settings.get('Sound in keywords'))
         tx = Transmitter(tx_cmd_port = 2122, output_keywords = self.settings.get('Sound out keywords'))
+        
         self.rig = Rig(hamlib_port)
         self.pskr_upload = PSKR_upload(self.settings.get('My call'), self.settings.get('My grid'), "PyFT8m")
         self.adif_log = ADIF(f"{self.settings.get('config_folder')}/PyFT8m.adi")
         
-        self.root = tk.Tk()
-        self.root.protocol("WM_DELETE_WINDOW", lambda: self.shutdown())
         self.app_container = tk.Frame(self.root)
         self.app_container.pack(side = 'top')
         self.sidebar_container = tk.Frame(self.app_container)
@@ -324,9 +326,11 @@ class Gui:
         self.settings.show()
 
     def shutdown(self):
-        self.rig.ptt_off()
-        self.rig.shutdown()
-        self.pskr_upload.shutdown()
+        if self.rig:
+            self.rig.ptt_off()
+            self.rig.shutdown()
+       # if self.pskr_upload:
+        #    self.pskr_upload.shutdown()
         self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.rx_cmd_port)
         self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.tx_cmd_port)
         self.udp_comms.shutdown()
@@ -335,6 +339,9 @@ class Gui:
 
     def _process_udp_msg(self, msg_dict):
         display_text = ''
+        if msg_dict['mtype'] == 'error':
+            print(msg_dict['info'])
+            self.shutdown()
         if msg_dict['mtype'] == 'decode':
             self.pskr_upload.add_report(self.dial_freq_Hz, msg_dict)
             their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], f"{float(msg_dict['fHz']):07.2f}", msg_dict['dt'], msg_dict['msg_tuple']
