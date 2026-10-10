@@ -56,12 +56,12 @@ class PSKR_upload:
     def shutdown(self):
         self.udp_comms_pskr.shutdown()
 
-    def add_report(self, dial_freq_Hz, msg_dict):
-        if msg_dict['mtype'] == 'decode':
-            their_snr, fHz = int(msg_dict['their_snr']), float(msg_dict['fHz'])
+    def add_report(self, band_tuple, msg_dict):
+        if band_tuple is not None:
+            band, fHz_dial = band_tuple
+            their_snr, freq_hz = int(msg_dict['their_snr']), fHz_dial + float(msg_dict['fHz'])
             dxcall, mode = msg_dict['msg_tuple'][1], "FT8"
             source, tt = 1, int(time.time())
-            freq_hz = dial_freq_Hz + fHz
             with self.lock:
                 self.reports[dxcall] = (dxcall, freq_hz, their_snr, mode, source, (tt // 15) * 15)
 
@@ -115,23 +115,25 @@ class ADIF:
                 f.write("header <eoh>\n")
         self.cache = self._build_cache()
               
-    def log(self, my_call, my_grid, their_call, their_grid, their_snr, my_snr, fHz):
+    def log(self, band_tuple, qso_dict):
         gmt = time.gmtime()
-        band = '20m'
-        log_dict = {'operator':my_call, 'station_callsign':my_call, 'my_gridsquare':my_grid, 'mode':'FT8',
-                    'time_on': time.strftime("%H%M%S", gmt), 'qso_date':time.strftime("%Y%m%d", gmt),
-                    'band':band, 'freq':int(fHz/1e6),
-                    'call':their_call, 'gridsquare': their_grid, 'rst_sent':their_snr, 'rst_rcvd':my_snr}
-        with open(self.adif_log_file,'a') as f:
-            for k, v in log_dict.items():
-                v = str(v)
-                if len(v) > 0:
+        qd = qso_dict
+        if band_tuple is not None:
+            band, fHz_dial = band_tuple
+            freq = f"{ (float(fHz_dial) + float(qd['fHz']))/1e6 : .3f}"
+            log_dict = {'operator':qd['call'], 'station_callsign':qd['call'], 'my_gridsquare':qd['grid'], 'mode':'FT8',
+                        'time_on': time.strftime("%H%M%S", gmt), 'qso_date':time.strftime("%Y%m%d", gmt),
+                        'band':band, 'freq': freq,
+                        'call':qd['their_call'], 'gridsquare': qd['their_grid'], 'rst_sent':qd['their_snr'], 'rst_rcvd':qd['my_snr']}
+            with open(self.adif_log_file,'a') as f:
+                for k, v in log_dict.items():
+                    v = str(v)
                     f.write(f"<{k}:{len(v)}>{v} ")
-            f.write(f"<eor>\n")
-        cbm = log_dict['call'] + "_" + log_dict['band'] + "_FT8"
-        tm = time.time()
-        self.cache[log_dict['call']] = tm
-        self.cache[cbm] = tm
+                f.write(f"<eor>\n")
+            cbm = log_dict['call'] + "_" + log_dict['band'] + "_FT8"
+            tm = time.time()
+            self.cache[log_dict['call']] = tm
+            self.cache[cbm] = tm
 
     def get_worked_before_info(self, their_call):
         wb_time = self.cache.get(their_call,'') 
@@ -173,6 +175,7 @@ class Rig:
 
     def _send_tcp(self, cmd):
         self.sock_hamlib.sendall((cmd + "\n").encode())
+        return self.sock_hamlib.recvfrom(25)[0].decode()
 
     def ptt_on(self):
         self._send_tcp(f"T 1")
@@ -183,7 +186,10 @@ class Rig:
     def set_band(self, band_tuple):
         band, fHz = band_tuple
         self._send_tcp(f"F {fHz}")
-        
+
+    def get_fHz(self):
+        fHz = int(self._send_tcp("f"))
+        return(fHz)
 
 class Settings:
     def __init__(self):
@@ -195,15 +201,17 @@ class Settings:
         self.root.deiconify()
         self.root.mainloop()
 
-
 PORTS = {'gui_to_rx': 2121, 'rx_to_gui':2122, 'gui_to_tx': 2123, 'tx_to_gui': 2124}
 MAX_CYCLETIME_TX_START = 3
 class Gui:
-    def __init__(self, Receiver = None, Transmitter = None, config = None):
+    def __init__(self, Receiver = None, Transmitter = None, config = None, band_tuples = None):
         self.config = config
+        self.band_tuples = band_tuples
+        self.band_tuple = None
         self.running = True
         self.root = tk.Tk()
         self.root.protocol("WM_DELETE_WINDOW", lambda: self._shutdown_all())
+        self.root.title("PyFT8m by G1OJS")
         self._start_components()
 
         self.pskr_upload = None
@@ -214,6 +222,10 @@ class Gui:
         if self.config.has_section('hamlib_rig'):
             self._ensure_hamlib_running()
             self.rig = Rig()
+            fHz = self.rig.get_fHz()
+            band_tuples = [bt for bt in self.band_tuples if (bt[1] - fHz) < 10000]
+            if len(band_tuples) == 1:
+                self.band_tuple = band_tuples[0]
 
         self.adif = None
         if self.config.has_section('logging'):
@@ -221,14 +233,15 @@ class Gui:
 
         self.settings = Settings()
         self._make_layout()
-        self.first_decode = False
-        self.init_qso_vars()
+        self.update_clock()
         self.update_waterfall()
         self.update_pskr_uploader()
-        self.dial_freq_Hz = 14074000
+        self.qso_dict = {'cyclestart_string': '', 'fHz':'0', 'dt':'0', 'decode_info':'', 'msg_tuple':('','',''),
+                         'call':self.config['station']['call'], 'grid':self.config['station']['grid'], 'my_snr':'-30',  
+                         'their_call':'', 'their_grid':'', 'their_snr':'-30'}
         self.pending_start_tx_stream = None
         self.pending_ptt_on = None
-        self.call_hashes = {}
+        self.last_rx_time = 0
         self.root.mainloop()
 
     def _ensure_hamlib_running(self):
@@ -291,6 +304,11 @@ class Gui:
         self.info_label = tk.Label(self.info_container, text = 'text', bg = '#707070')
         self.info_label.pack(side = 'top', fill = 'both')
 
+        self.clock_frame = tk.Frame(self.sidebar_container, width = 10)
+        self.clock_frame.pack(side = 'top')
+        self.clock_lbl = tk.Label(self.clock_frame, font=('calibri', 14, 'bold'), bg='purple', fg='white')
+        self.clock_lbl.pack(anchor='center')
+
         self.buttons = []
         bc = self.sidebar_container
         #self.buttons.append(tk.Button(bc, width = 10, text = 'Settings', command = self.settings.show))
@@ -298,18 +316,17 @@ class Gui:
         self.buttons.append(tk.Button(bc, width = 10, text = 'Repeat last', command = self.queue_transmit))
         self.buttons.append(tk.Button(bc, width = 10, text = 'STOP TX', command = self.stop_transmit))
         for btn in self.buttons:
-            btn.pack(side = 'top', anchor = 'n')
+            btn.pack(side = 'top', anchor = 'n', pady = 1)
 
-        for band in self.config['bands']:
-            fHz = 1000000 * float(self.config['bands'][band])
-            band_tuple = (band, fHz)
+        for band_tuple in self.band_tuples:
+            band, _ = band_tuple
             btn = tk.Button(bc, width = 10, text = band, command = lambda band_tuple = band_tuple: self.set_band(band_tuple))
-            btn.pack(side = 'top', anchor = 'n')
+            btn.pack(side = 'top', anchor = 'n', pady = 1)
             self.buttons.append(btn)
             
         self.waterfall_canvas = tk.Canvas(self.waterfall_container, height = 100, bg = '#909090')
         self.waterfall_canvas.pack(side = 'top', fill = 'both')
-        self.waterfall_line = self.waterfall_canvas.create_line(0,0,600,0, fill = 'green', width = 2)
+        self.waterfall_line = self.waterfall_canvas.create_line(0,0,600,0, fill = '#40E040', width = 2)
         self.waterfall_vals = None
         self.waterfall_new_vals = None
         
@@ -318,55 +335,81 @@ class Gui:
         self.text_widget = tk.Text(self.decodes_container, wrap=tk.WORD, yscrollcommand=self.scrollbar.set)
         self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        fontsize = 10
-        self.text_widget.tag_config('norm', foreground = 'white', background = 'blue', font=('Helvetica', fontsize, 'bold'))
-        self.text_widget.tag_config('info', foreground = 'black', background = 'white', font=('Helvetica', fontsize, 'bold'))
-        self.text_widget.tag_config('cq', foreground = 'white', background = 'green', font=('Helvetica', fontsize, 'bold'))
-        self.text_widget.tag_config('to_me', foreground = 'white', background = 'red', font=('Helvetica', fontsize, 'bold'))        
-        self.text_widget.tag_config('from_me', foreground = 'black', background = 'yellow', font=('Helvetica', fontsize, 'bold'))
+        font=('calibri', 12, 'bold')
+        self.text_widget.tag_config('norm', foreground = 'white', background = 'blue', font = font )
+        self.text_widget.tag_config('info', foreground = 'black', background = 'white', font = font)
+        self.text_widget.tag_config('cq', foreground = 'white', background = 'green', font = font)
+        self.text_widget.tag_config('to_me', foreground = 'white', background = 'red', font = font)        
+        self.text_widget.tag_config('from_me', foreground = 'black', background = 'yellow', font = font)
         self.text_widget.bind('<Button-1>', self.row_click)
 
         self.scrollbar.config(command=self.text_widget.yview)
 
     def _handle_udp_message(self, msg_dict):
-        display_text = ''
         if msg_dict['mtype'] == 'STATUS':
             self.component_status[msg_dict['from']] = msg_dict['value']
         if msg_dict['mtype'] == 'decode':
-            self.pskr_upload.add_report(self.dial_freq_Hz, msg_dict)
-            their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], f"{float(msg_dict['fHz']):07.2f}", msg_dict['dt'], msg_dict['msg_tuple']
-            idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(self.my_call) + 3 * (msg_tuple[1] == self.my_call)
-            display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
-            display_text = f"{their_snr:4s} {dt:5s} {fHz:7s} ~ {' '.join(msg_tuple)}"
-            if msg_tuple[1] == self.their_call:
-                my_reply = self.determine_reply(' '.join(msg_tuple))
-                self.queue_transmit(my_reply)
-                if len(msg_tuple) == 3:
-                    if any([m for m in ['+','-'] if m in msg_tuple[2]]): # grid_rpt == rpt
-                        self.my_snr = msg_tuple[2]
-                    if not any([m for m in ['+','-','RR','73'] if m in msg_tuple[2]]): # grid_rpt == grid
-                        self.their_grid = msg_tuple[2]
-                if "73" in my_reply:
-                    self.adif_log.log(self.my_call, self.my_grid, self.their_call, self.their_grid,
-                                      self.their_snr, self.my_snr, self.dial_freq_Hz + float(fHz))
-                    self.their_call = ''
-        elif msg_dict['mtype'] == 'rollover':
-            display_type = 'info'
-            display_text = ''
-            self.first_decode = False
+            self.pskr_upload.add_report(self.band_tuple, msg_dict)
+            self.process_decode(msg_dict)
         elif msg_dict['mtype'] == 'waterfall':
             self.waterfall_new_vals = [int(v) for v in msg_dict['data'].split(',')]
-            display_text = ''
-        if display_text:
-            if not self.first_decode:
-                self.text_widget.delete(1.0, tk.END)
-                self.first_decode = True
-            self.text_widget.insert(tk.END, f"{display_text}\n", display_type)
-            self.text_widget.see('end')
+
+    def process_decode(self, msg_dict):
+        new_cycle = msg_dict['cyclestart_string'] != self.qso_dict['cyclestart_string']
+        their_snr, dt, fHz, msg_tuple = msg_dict['their_snr'], msg_dict['dt'], msg_dict['fHz'], msg_dict['msg_tuple']
+        display_text = f" {their_snr}  {dt}  {float(fHz):07.2f}  ~  {' '.join(msg_tuple)}"
+        idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(self.qso_dict['call']) + 3 * (msg_tuple[1] == self.qso_dict['call'])
+        display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
+        tnow = time.time()
+        if new_cycle or tnow > self.last_rx_time + 15:
+            self.text_widget.delete(1.0, tk.END)
+            self.qso_dict.update({'cyclestart_string': msg_dict['cyclestart_string']})
+        self.last_rx_time = tnow
+        self.text_widget.insert(tk.END, f"{display_text}\n", display_type)
+        self.text_widget.see('end')
+        if msg_tuple[0] == self.qso_dict['call']:
+            self.progress_qso(msg_tuple)
+
+    def row_click(self, e):
+        curr = e.widget.index("current").split('.')[0]
+        row_txt = e.widget.get(f"{curr}.0", f"{curr}.end")
+        if "~" in row_txt:
+            rx_msg = row_txt.split(' ~ ')[1][1:]
+            msg_tuple = rx_msg.split(' ')
+            self.qso_dict.update({'their_call':msg_tuple[1], 'their_snr': row_txt[:3]})
+            self.progress_qso(msg_tuple)
+                    
+    def progress_qso(self, msg_tuple):
+        if len(msg_tuple) == 3:
+            hail, their_call, grid_rpt = msg_tuple
+            reply = ''
+            tcmc = f"{self.qso_dict['their_call']} {self.qso_dict['call']}"
+            if hail.startswith("CQ"):
+                reply = f"{tcmc} {self.qso_dict['grid'][:4]}"
+            if hail.startswith(self.qso_dict['call']):
+                reply = f"{tcmc} {self.qso_dict['their_snr']}"
+                if any([m for m in ['+','-'] if m in grid_rpt]):
+                    reply = f"{tcmc} R{self.qso_dict['their_snr']}"
+                if any([m for m in ['R+','R-','RRR'] if m in grid_rpt]):
+                    reply = f"{tcmc} RR73"
+                if grid_rpt == 'RR73':
+                    reply = f"{tcmc} 73"
+            self.queue_transmit(reply)
+            if any([m for m in ['+','-'] if m in grid_rpt]): # grid_rpt == rpt
+                self.qso_dict['my_snr'] = grid_rpt
+            if not any([m for m in ['+','-','RR','73'] if m in grid_rpt]): # grid_rpt == grid
+                self.qso_dict['their_grid'] = grid_rpt
+            if "73" in reply:
+                self.adif_log.log(self.band_tuple, self.qso_dict)
 
     def set_band(self, band_tuple):
         self.band_tuple = band_tuple
         self.rig.set_band(band_tuple)
+        self.text_widget.delete(1.0, tk.END)
+
+    def update_clock(self):
+        self.clock_lbl.config(text = time.strftime('%H:%M:%S'))
+        self.clock_lbl.after(1000, self.update_clock)
 
     def update_pskr_uploader(self):
         if self.pskr_upload and self.running:
@@ -386,42 +429,8 @@ class Gui:
         if self.running:
             self.waterfall_canvas.after(250, self.update_waterfall)
 
-    def init_qso_vars(self):
-        self.their_grid = ''
-        self.their_call = ''
-        self.their_snr = -30
-        self.my_snr = -30
-        self.my_call = self.config['station']['call']
-        self.my_grid = self.config['station']['grid']
-
-    def determine_reply(self, rx_message):
-        hail, self.their_call, grid_rpt = rx_message.split(' ')
-        if hail.startswith("CQ"):
-            reply = f"{self.their_call} {self.my_call} {self.my_grid[:4]}"   
-        elif hail.startswith(self.my_call):
-            reply = f"{self.their_call} {self.my_call} {self.their_snr}"
-            if any([m for m in ['+','-'] if m in grid_rpt]):
-                reply = f"{self.their_call} {self.my_call} R{self.their_snr}"
-            if any([m for m in ['R+','R-','RRR'] if m in grid_rpt]):
-                reply = f"{self.their_call} {self.my_call} RR73"
-            if grid_rpt == 'RR73':
-                reply = f"{self.their_call} {self.my_call} 73"
-        else:
-            reply = ''
-        return reply
-
-    def row_click(self, e):
-        curr = e.widget.index("current").split('.')[0]
-        row_txt = e.widget.get(f"{curr}.0", f"{curr}.end")
-        if "~" in row_txt:
-            rx_message = row_txt.split('~')[1][1:]
-            self.their_snr = row_txt[:3]
-            reply = self.determine_reply(rx_message)
-            self.queue_transmit(reply)
-
     def call_cq(self):
-        if self.my_call and self.my_grid:
-            self.queue_transmit(f"CQ {self.my_call} {self.my_grid}")
+        self.queue_transmit(f"CQ {self.config['station']['call']} {self.config['station']['grid']}")
 
     def queue_transmit(self, message = None):
         T_CYC, TX_T0 = 15, 0.5
@@ -480,9 +489,14 @@ if __name__ == "__main__":
             sys.exit()
         print(f"Reading config from {ini_file}")
         config.read(ini_file)
-        return config
+        band_tuples = []
+        if config.has_section('bands'):
+            for band in config['bands']:
+                fHz = 1000000 * float(config['bands'][band])
+                band_tuples.append((band, fHz))
+        return config, band_tuples
 
     config_folder = os.path.expanduser("~").replace('\\', '/')
-    config = get_config(config_folder)
-    gui = Gui(Receiver = Receiver, Transmitter = Transmitter, config = config)
+    config, band_tuples = get_config(config_folder)
+    gui = Gui(Receiver = Receiver, Transmitter = Transmitter, config = config, band_tuples = band_tuples)
 
