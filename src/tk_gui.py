@@ -289,7 +289,10 @@ class Gui:
         self.root.destroy()
         sys.exit()
 
-    def _make_layout(self):        
+    def _make_layout(self):
+        font_clk = ('calibri', 14, 'bold')
+        font_msg = ('calibri', 11, 'bold')
+        font_btn = ('calibri', 11, 'bold')
         self.app_container = tk.Frame(self.root)
         self.app_container.pack(side = 'top')
         self.sidebar_container = tk.Frame(self.app_container)
@@ -306,21 +309,21 @@ class Gui:
 
         self.clock_frame = tk.Frame(self.sidebar_container, width = 10)
         self.clock_frame.pack(side = 'top')
-        self.clock_lbl = tk.Label(self.clock_frame, font=('calibri', 14, 'bold'), bg='purple', fg='white')
+        self.clock_lbl = tk.Label(self.clock_frame, font = font_clk , bg='purple', fg='white')
         self.clock_lbl.pack(anchor='center')
 
         self.buttons = []
         bc = self.sidebar_container
         #self.buttons.append(tk.Button(bc, width = 10, text = 'Settings', command = self.settings.show))
-        self.buttons.append(tk.Button(bc, width = 10, text = 'CQ', command = self.call_cq))
-        self.buttons.append(tk.Button(bc, width = 10, text = 'Repeat last', command = self.queue_transmit))
-        self.buttons.append(tk.Button(bc, width = 10, text = 'STOP TX', command = self.stop_transmit))
+        self.buttons.append(tk.Button(bc, width = 10, font = font_btn, text = 'CQ', command = self.call_cq))
+        self.buttons.append(tk.Button(bc, width = 10, font = font_btn, text = 'Repeat last', command = self.queue_transmit))
+        self.buttons.append(tk.Button(bc, width = 10, font = font_btn, text = 'STOP TX', command = self.stop_transmit))
         for btn in self.buttons:
             btn.pack(side = 'top', anchor = 'n', pady = 1)
 
         for band_tuple in self.band_tuples:
             band, _ = band_tuple
-            btn = tk.Button(bc, width = 10, text = band, command = lambda band_tuple = band_tuple: self.set_band(band_tuple))
+            btn = tk.Button(bc, width = 10, text = band, font = font_btn, command = lambda band_tuple = band_tuple: self.set_band(band_tuple))
             btn.pack(side = 'top', anchor = 'n', pady = 1)
             self.buttons.append(btn)
             
@@ -336,11 +339,11 @@ class Gui:
         self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         font=('calibri', 12, 'bold')
-        self.text_widget.tag_config('norm', foreground = 'white', background = 'blue', font = font )
-        self.text_widget.tag_config('info', foreground = 'black', background = 'white', font = font)
-        self.text_widget.tag_config('cq', foreground = 'white', background = 'green', font = font)
-        self.text_widget.tag_config('to_me', foreground = 'white', background = 'red', font = font)        
-        self.text_widget.tag_config('from_me', foreground = 'black', background = 'yellow', font = font)
+        self.text_widget.tag_config('norm', foreground = 'white', background = 'blue', font = font_msg )
+        self.text_widget.tag_config('info', foreground = 'black', background = 'white', font = font_msg)
+        self.text_widget.tag_config('cq', foreground = 'white', background = 'green', font = font_msg)
+        self.text_widget.tag_config('to_me', foreground = 'white', background = 'red', font = font_msg)        
+        self.text_widget.tag_config('from_me', foreground = 'black', background = 'yellow', font = font_msg)
         self.text_widget.bind('<Button-1>', self.row_click)
 
         self.scrollbar.config(command=self.text_widget.yview)
