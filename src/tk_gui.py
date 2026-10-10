@@ -289,7 +289,7 @@ class Gui:
 
         self.buttons = []
         bc = self.sidebar_container
-        self.buttons.append(tk.Button(bc, width = 10, text = 'Settings', command = self.settings.show))
+        #self.buttons.append(tk.Button(bc, width = 10, text = 'Settings', command = self.settings.show))
         self.buttons.append(tk.Button(bc, width = 10, text = 'CQ', command = self.call_cq))
         self.buttons.append(tk.Button(bc, width = 10, text = 'STOP TX', command = self.stop_transmit))
         for btn in self.buttons:
