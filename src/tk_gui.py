@@ -163,19 +163,9 @@ class ADIF:
 
 class Rig:
     def __init__(self, hamlib_port = 4532):
-        self._ensure_hamlib_running()
-        time.sleep(0.1)
         self.hamlib_port = hamlib_port
         self.sock_hamlib = socket.create_connection(('localhost', self.hamlib_port))
-        time.sleep(0.1)
         self._send_tcp("M PKTUSB 0")
-
-    def _ensure_hamlib_running(self):
-        com_rig, com_baud, rigctld, rig_code = 'COM4',9600,'C:/WSJT/wsjtx/bin/rigctld-wsjtx', 3070
-        # above 4 params to go in config eventually
-        if not any(['rigctld' in i.name() for i in psutil.process_iter()]):
-            cmd = f"{rigctld} -m {rig_code} -r {com_rig} -s {com_baud}"
-            threading.Thread(target = subprocess.run, args = (cmd,)).start()   
 
     def shutdown(self):
         self.sock_hamlib.close()
@@ -194,91 +184,56 @@ class Rig:
 class Settings:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.protocol("WM_DELETE_WINDOW", self.quit)
-        self.initialise()
-        self._load()
+        #self.root.protocol("WM_DELETE_WINDOW", self.quit)
         self.root.iconify()
 
     def show(self):          
         self.root.deiconify()
         self.root.mainloop()
 
-    def initialise(self):
-        config_folder = os.path.expanduser("~")
-        self.cfg_file = f"{config_folder}/PyFT8m.cfg"
-        cfg_items = ['My call', 'My grid', 'Sound out keywords', 'Sound in keywords']
-        self.cfg = {}
-        for cfg_item in cfg_items:
-            frm = tk.Frame(self.root)
-            var = tk.StringVar()
-            ent = tk.Entry(frm, textvariable = var)
-            lbl = tk.Label(frm, text = cfg_item)
-            lbl.pack(side = 'left')
-            ent.pack(side = 'left')
-            self.cfg[cfg_item] = var
-            frm.pack(side = 'top')
-        self.cfg['config_folder'] = tk.StringVar()
-        self.cfg['config_folder'].set(config_folder)
-
-    def get(self, cfg_item):
-        return self.cfg[cfg_item].get()
-
-    def allOK(self):
-        return all([self.cfg[s].get() for s in ['My call', 'My grid', 'Sound out keywords', 'Sound in keywords']])
-    
-    def quit(self):
-        self._save()
-        if self.allOK():
-            self.root.iconify()
-            self.root.quit()
-
-    def _save(self):
-        cfg_dict = {k: v.get() for k, v in self.cfg.items()}
-        with open(self.cfg_file, 'w') as f:
-            json.dump(cfg_dict, f)
-
-    def _load(self):
-        if os.path.exists(self.cfg_file):
-            with open(self.cfg_file, 'r') as f:
-                cfg_dict = json.load(f)
-            for k in cfg_dict:
-                if k in self.cfg:
-                    self.cfg[k].set(cfg_dict[k])
 
 PORTS = {'gui_to_rx': 2121, 'rx_to_gui':2122, 'gui_to_tx': 2123, 'tx_to_gui': 2124}
 MAX_CYCLETIME_TX_START = 3
 class Gui:
-    def __init__(self, Receiver = None, Transmitter = None):
-        self.rig = None
+    def __init__(self, Receiver = None, Transmitter = None, config = None):
+        self.config = config
         self.running = True
-        self.pskr_upload = None
-        self.root = None
-        self.component_status = {}
-        self.udp_q = queue.Queue()
         self.root = tk.Tk()
         self.root.protocol("WM_DELETE_WINDOW", lambda: self._shutdown_all())
-        
-        self.settings = Settings()
-        if not self.settings.allOK():
-            self.settings.show()
-            
         self._start_components()
-        self._make_layout()
 
-        if self.running:
-            self.first_decode = False
-            self.pskr_upload = PSKR_upload(self.settings.get('My call'), self.settings.get('My grid'), "PyFT8m")
-            self.adif_log = ADIF(f"{self.settings.get('config_folder')}/PyFT8m.adi")
+        self.pskr_upload = None
+        if self.config['pskreporter']['upload'] == 'Y':
+            self.pskr_upload = PSKR_upload(self.config['station']['call'], self.config['station']['grid'], "PyFT8m")
+
+        self.rig = None
+        if self.config.has_section('hamlib_rig'):
+            self._ensure_hamlib_running()
             self.rig = Rig()
-            self.init_qso_vars()
-            self.update_waterfall()
-            self.update_pskr_uploader()
-            self.dial_freq_Hz = 14074000
-            self.pending_start_tx_stream = None
-            self.pending_ptt_on = None
-            self.call_hashes = {}
-            self.root.mainloop()
 
+        self.adif = None
+        if self.config.has_section('logging'):
+            self.adif_log = ADIF(self.config['logging']['logfile'])
+
+        self.settings = Settings()
+        self._make_layout()
+        self.first_decode = False
+        self.init_qso_vars()
+        self.update_waterfall()
+        self.update_pskr_uploader()
+        self.dial_freq_Hz = 14074000
+        self.pending_start_tx_stream = None
+        self.pending_ptt_on = None
+        self.call_hashes = {}
+        self.root.mainloop()
+
+    def _ensure_hamlib_running(self):
+        if not any(['rigctld' in i.name() for i in psutil.process_iter()]):
+            hamlib_cfg_keys = ['rigctld', 'model', 'port', 'baud_rate']
+            vals = [self.config['hamlib_rig'][key] for key in hamlib_cfg_keys]
+            cmd = f"{vals[0]} -m {vals[1]} -r {vals[2]} -s {vals[3]}"
+            threading.Thread(target = subprocess.run, args = (cmd,)).start() 
+        
     def _monitor_udp(self):
         if not self.udp_q.empty():
             self._handle_udp_message(self.udp_q.get())
@@ -286,11 +241,13 @@ class Gui:
             self.root.after(100, self._monitor_udp)
 
     def _start_components(self):
+        self.component_status = {}
+        self.udp_q = queue.Queue()
         self.udp_comms_rcvr = UdpComms(ports = {'listen':PORTS['rx_to_gui'], 'send':PORTS['gui_to_rx']}, rx_callback = lambda msg_dict: self.udp_q.put(msg_dict))
         self.udp_comms_txr = UdpComms(ports = {'listen':PORTS['tx_to_gui'], 'send':PORTS['gui_to_tx']}, rx_callback = lambda msg_dict: self.udp_q.put(msg_dict))
         self._monitor_udp()
-        rx = Receiver(ports = {'listen':PORTS['gui_to_rx'], 'send':PORTS['rx_to_gui']}, input_keywords = self.settings.get('Sound in keywords'))
-        tx = Transmitter(ports = {'listen':PORTS['gui_to_tx'], 'send':PORTS['tx_to_gui']}, output_keywords = self.settings.get('Sound out keywords'))
+        rx = Receiver(ports = {'listen':PORTS['gui_to_rx'], 'send':PORTS['rx_to_gui']}, input_keywords = self.config['soundcard']['receive'])
+        tx = Transmitter(ports = {'listen':PORTS['gui_to_tx'], 'send':PORTS['tx_to_gui']}, output_keywords = self.config['soundcard']['transmit'])
         self.root.after(2000, self._check_components)
 
     def _check_components(self):
@@ -396,8 +353,8 @@ class Gui:
             self.text_widget.see('end')
 
     def update_pskr_uploader(self):
-        self.pskr_upload.send_reports()
-        if self.running:
+        if self.pskr_upload and self.running:
+            self.pskr_upload.send_reports()
             self.root.after(60, self.update_pskr_uploader)
 
     def update_waterfall(self):
@@ -418,8 +375,8 @@ class Gui:
         self.their_call = ''
         self.their_snr = -30
         self.my_snr = -30
-        self.my_call = self.settings.get('My call')
-        self.my_grid = self.settings.get('My grid')
+        self.my_call = self.config['station']['call']
+        self.my_grid = self.config['station']['grid']
 
     def determine_reply(self, rx_message):
         hail, self.their_call, grid_rpt = rx_message.split(' ')
@@ -480,5 +437,36 @@ class Gui:
         print("Transmit cancelled")
 
 if __name__ == "__main__":
-    gui = Gui(Receiver = Receiver, Transmitter = Transmitter)
+    import configparser
+
+    def get_config(config_folder):
+        config = configparser.ConfigParser()
+        ini_file = f"{config_folder}/PyFT8m.ini"
+        if not os.path.exists(ini_file):
+            resp = input(f"No config file found at {ini_file}\nWould you like to create one (Y/N)? ")
+            if resp.upper() !="Y":
+                print("Exiting program")
+                sys.exit()
+            station_callsign = input(f"Please enter your callsign: ")
+            station_grid = ''
+            while len(station_grid) < 4:
+                station_grid = input(f"Please enter your Maidenhead locator (at least 4 characters, you can edit this later): ")
+            config['station'] = {'call':station_callsign, 'grid':station_grid}
+            config['bands'] = {'20m':14.074}
+            config['gui'] = {'loc':'km_deg', 'wb':'Y'}
+            config['hamlib_rig'] = {'rigctld':'C:/WSJT/wsjtx/bin/rigctld-wsjtx', 'port': 'COM4', 'baud_rate':9600, 'model':3070}
+            config['soundcard'] = {'transmit':'Speak, CODEC', 'receive':'Mic, CODEC'}
+            config['pskreporter'] = {'upload':'Y'}
+            config['logging'] = {'logfile': f"{config_folder}/PyFT8m.adi"}
+            with open(ini_file, 'w') as f:
+                config.write(f)
+            print(f"Wrote default config to {ini_file}. Please open and edit to add bands, frequencies and preferences and re-launch PyFT8m.")
+            sys.exit()
+        print(f"Reading config from {ini_file}")
+        config.read(ini_file)
+        return config
+
+    config_folder = os.path.expanduser("~").replace('\\', '/')
+    config = get_config(config_folder)
+    gui = Gui(Receiver = Receiver, Transmitter = Transmitter, config = config)
 
