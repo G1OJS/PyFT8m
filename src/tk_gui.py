@@ -120,9 +120,10 @@ class ADIF:
         qd = qso_dict
         if band_tuple is not None:
             band, fHz_dial = band_tuple
+            freq = f"{ (float(fHz_dial) + float(qd['fHz']))/1e6 : .3f}"
             log_dict = {'operator':qd['call'], 'station_callsign':qd['call'], 'my_gridsquare':qd['grid'], 'mode':'FT8',
                         'time_on': time.strftime("%H%M%S", gmt), 'qso_date':time.strftime("%Y%m%d", gmt),
-                        'band':band, 'freq':int((fHz_dial + int(qd['fHz']))/1e6),
+                        'band':band, 'freq': freq,
                         'call':qd['their_call'], 'gridsquare': qd['their_grid'], 'rst_sent':qd['their_snr'], 'rst_rcvd':qd['my_snr']}
             with open(self.adif_log_file,'a') as f:
                 for k, v in log_dict.items():
@@ -360,7 +361,7 @@ class Gui:
         tnow = time.time()
         if new_cycle or tnow > self.last_rx_time + 15:
             self.text_widget.delete(1.0, tk.END)
-            self.qso_dict.update({'cyclestart_string':msg_dict['cyclestart_string']})
+            self.qso_dict.update({'cyclestart_string': msg_dict['cyclestart_string']})
         self.last_rx_time = tnow
         self.text_widget.insert(tk.END, f"{display_text}\n", display_type)
         self.text_widget.see('end')
