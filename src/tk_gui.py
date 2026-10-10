@@ -238,6 +238,7 @@ class Gui:
                          'their_call':'', 'their_grid':'', 'their_snr':'-30'}
         self.pending_start_tx_stream = None
         self.pending_ptt_on = None
+        self.last_rx_time = 0
         self.root.mainloop()
 
     def _ensure_hamlib_running(self):
@@ -352,29 +353,31 @@ class Gui:
 
     def process_decode(self, msg_dict):
         new_cycle = msg_dict['cyclestart_string'] != self.qso_dict['cyclestart_string']
-        their_snr, dt, fHz, mt = msg_dict['their_snr'], msg_dict['dt'], msg_dict['fHz'], msg_dict['msg_tuple']
-        display_text = f"{their_snr} {dt} {fHz} ~ {' '.join(mt)}"
-        idx = 1 * mt[0].startswith("CQ") + 2* mt[0].startswith(self.qso_dict['call']) + 3 * (mt[1] == self.qso_dict['call'])
+        their_snr, dt, fHz, msg_tuple = msg_dict['their_snr'], msg_dict['dt'], msg_dict['fHz'], msg_dict['msg_tuple']
+        display_text = f"{their_snr} {dt} {fHz} ~ {' '.join(msg_tuple)}"
+        idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(self.qso_dict['call']) + 3 * (msg_tuple[1] == self.qso_dict['call'])
         display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
-        if new_cycle:
+        tnow = time.time()
+        if new_cycle or tnow > self.last_rx_time + 15:
             self.text_widget.delete(1.0, tk.END)
             self.qso_dict.update({'cyclestart_string':msg_dict['cyclestart_string']})
+        self.last_rx_time = tnow
         self.text_widget.insert(tk.END, f"{display_text}\n", display_type)
         self.text_widget.see('end')
-        if mt[0] == self.qso_dict['call']:
-            self.progress_qso()
+        if msg_tuple[0] == self.qso_dict['call']:
+            self.progress_qso(msg_tuple)
 
     def row_click(self, e):
         curr = e.widget.index("current").split('.')[0]
         row_txt = e.widget.get(f"{curr}.0", f"{curr}.end")
-        rx_message = row_txt.split('~')[1][1:]
-        self.qso_dict.update({'their_call':rx_message.split(' ')[1], 'their_snr': row_txt[:3]})
-        self.progress_qso()
+        rx_msg = row_txt.split('~')[1][1:]
+        msg_tuple = rx_msg.split(' ')
+        self.qso_dict.update({'their_call':msg_tuple[1], 'their_snr': row_txt[:3]})
+        self.progress_qso(msg_tuple)
                 
-    def progress_qso(self):
-        mt = self.qso_dict['msg_tuple']
-        if len(mt) == 3:
-            hail, their_call, grid_rpt = mt
+    def progress_qso(self, msg_tuple):
+        if len(msg_tuple) == 3:
+            hail, their_call, grid_rpt = msg_tuple
             reply = ''
             tcmc = f"{self.qso_dict['their_call']} {self.qso_dict['call']}"
             if hail.startswith("CQ"):
@@ -388,16 +391,17 @@ class Gui:
                 if grid_rpt == 'RR73':
                     reply = f"{tcmc} 73"
             self.queue_transmit(reply)
-            if any([m for m in ['+','-'] if m in msg_tuple[2]]): # grid_rpt == rpt
-                qd['my_snr'] = msg_tuple[2]
-            if not any([m for m in ['+','-','RR','73'] if m in msg_tuple[2]]): # grid_rpt == grid
-                qd['their_grid'] = msg_tuple[2]
+            if any([m for m in ['+','-'] if m in grid_rpt]): # grid_rpt == rpt
+                self.qso_dict['my_snr'] = grid_rpt
+            if not any([m for m in ['+','-','RR','73'] if m in grid_rpt]): # grid_rpt == grid
+                self.qso_dict['their_grid'] = grid_rpt
             if "73" in reply:
-                self.adif_log.log(self.band_tuple, qd)
+                self.adif_log.log(self.band_tuple, self.qso_dict)
 
     def set_band(self, band_tuple):
         self.band_tuple = band_tuple
         self.rig.set_band(band_tuple)
+        self.text_widget.delete(1.0, tk.END)
 
     def update_pskr_uploader(self):
         if self.pskr_upload and self.running:
