@@ -370,11 +370,12 @@ class Gui:
     def row_click(self, e):
         curr = e.widget.index("current").split('.')[0]
         row_txt = e.widget.get(f"{curr}.0", f"{curr}.end")
-        rx_msg = row_txt.split('~')[1][1:]
-        msg_tuple = rx_msg.split(' ')
-        self.qso_dict.update({'their_call':msg_tuple[1], 'their_snr': row_txt[:3]})
-        self.progress_qso(msg_tuple)
-                
+        if "~" in row_txt:
+            rx_msg = row_txt.split('~')[1][1:]
+            msg_tuple = rx_msg.split(' ')
+            self.qso_dict.update({'their_call':msg_tuple[1], 'their_snr': row_txt[:3]})
+            self.progress_qso(msg_tuple)
+                    
     def progress_qso(self, msg_tuple):
         if len(msg_tuple) == 3:
             hail, their_call, grid_rpt = msg_tuple
