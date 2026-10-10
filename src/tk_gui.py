@@ -1,5 +1,5 @@
 import tkinter as tk
-import time, threading, struct, random, json, socket, os, sys, psutil, subprocess
+import time, threading, struct, random, json, socket, os, queue, sys, psutil, subprocess
 import numpy as np
 import paho.mqtt.client as mqtt
 from ast import literal_eval
@@ -37,14 +37,14 @@ class PSKR_MQTT_listener:
 class PSKR_upload:
     # https://pskreporter.info/pskdev.html
     # https://pskreporter.info/cgi-bin/psk-analysis.pl
-    def __init__(self, mycall, mygrid, software):
+    def __init__(self, mycall, mygrid, software, pskr_addr = {'host':'report.pskreporter.info', 'port':4739}):
+        self.pskr_addr = pskr_addr
+        self.udp_comms = UdpComms()
         self.RxInfoRecDescriptor_CallLocSoft = b"\x00\x03\x00\x24\x99\x92\x00\x03\x00\x01\x80\x02\xFF\xFF\x00\x00\x76\x8F\x80\x04\xFF\xFF\x00\x00\x76\x8F\x80\x08\xFF\xFF\x00\x00\x76\x8F\x00\x00"
         self.SenderInfoRecDescriptor_SenderFreqSNRiMDModeSourceTime = b"\x00\x02\x00\x3C\x99\x93\x00\x07\x80\x01\xFF\xFF\x00\x00\x76\x8F\x80\x05\x00\x04\x00\x00\x76\x8F\x80\x06\x00\x01\x00\x00\x76\x8F\x80\x07\x00\x01\x00\x00\x76\x8F\x80\x0A\xFF\xFF\x00\x00\x76\x8F\x80\x0B\x00\x01\x00\x00\x76\x8F\x00\x96\x00\x04"
         self.last_descriptors_time = 0
         self.descriptors_sent_count = 0
         self.last_report_time = time.time() - 300 + 60
-        self.udp_comms = UdpComms()
-        self.addr = ("report.pskreporter.info", 4739)
         self.session_id = random.getrandbits(32)
         self.seq = 1
         self.reports = {}
@@ -53,8 +53,8 @@ class PSKR_upload:
         self.lock = threading.Lock()
         print(f"[PSKR_upload] Spots will upload to pskreporter if Rx band is known")
 
-    def shutdown(self):
-        self.udp_comms.shutdown()
+    def _shutdown(self):
+        self.udp_comms._shutdown()
 
     def add_report(self, dial_freq_Hz, msg_dict):
         if msg_dict['mtype'] == 'decode':
@@ -102,7 +102,8 @@ class PSKR_upload:
         packet = bytearray(header + self.rx_block + self._block(b"\x99\x93", senders))
         struct.pack_into("!H", packet, 2, len(packet))
         self.seq += len(self.reports)
-        self.udp_comms.udp_send_bytes(packet, dest_host = self.addr[0], dest_port = self.addr[1])
+        self.udp_comms.udp_send_bytes(packet, dest_host = self.pskr_addr['host'], dest_port = self.pskr_addr['port'])
+        self.udp_q = queue.Queue
         self.reports = {}
         self.last_report_time = time.time()
         print(f"[pskr_upload] Reports sent")
@@ -162,7 +163,7 @@ class ADIF:
         return cache
 
 class Rig:
-    def __init__(self, hamlib_port):
+    def __init__(self, hamlib_port = 4532):
         self._ensure_hamlib_running()
         time.sleep(0.1)
         self.hamlib_port = hamlib_port
@@ -177,7 +178,7 @@ class Rig:
             cmd = f"{rigctld} -m {rig_code} -r {com_rig} -s {com_baud}"
             threading.Thread(target = subprocess.run, args = (cmd,)).start()   
 
-    def shutdown(self):
+    def _shutdown(self):
         self.sock_hamlib.close()
         print("Rig control is shut down")
 
@@ -245,28 +246,67 @@ class Settings:
                 if k in self.cfg:
                     self.cfg[k].set(cfg_dict[k])
 
+PORTS = {'gui_to_rx': 2122, 'rx_to_gui':2121, 'gui_to_tx': 2124, 'tx_to_gui': 2123}
+
 class Gui:
-    def __init__(self, tx_cmd_port = 2122, rx_msg_port = 2121, rx_cmd_port = 2123, pskr_uploader_msg_port = 2123,
-                 hamlib_port = 4532, max_tx_cycletime_start = 3, Receiver = None, Transmitter = None):
-        self.tx_cmd_port = tx_cmd_port
-        self.rx_cmd_port = rx_cmd_port
+    def __init__(self, Receiver = None, Transmitter = None):
         self.rig = None
         self.running = True
         self.pskr_upload = None
-        self.max_tx_cycletime_start = max_tx_cycletime_start
+        self.root = None
+        self.udp_q = queue.Queue()
         self.root = tk.Tk()
-        self.root.protocol("WM_DELETE_WINDOW", lambda: self.shutdown())
+        self.root.protocol("WM_DELETE_WINDOW", lambda: self._shutdown())
         
-        self.udp_comms = UdpComms(rx_msg_port, self._process_udp_msg)
         self.settings = Settings()
         if not self.settings.allOK():
             self.settings.show()
-       
-        rx = Receiver(max_freq = 2900, latest_decode = 2, rx_msg_port = 2121,
-                      input_keywords = self.settings.get('Sound in keywords'))
-        tx = Transmitter(tx_cmd_port = 2122, output_keywords = self.settings.get('Sound out keywords'))
-        
-        
+            
+        self._start_components()
+        self._make_layout()
+
+        if self.running:
+            self.first_decode = False
+            self.pskr_upload = PSKR_upload(self.settings.get('My call'), self.settings.get('My grid'), "PyFT8m")
+            self.adif_log = ADIF(f"{self.settings.get('config_folder')}/PyFT8m.adi")
+            self.rig = Rig()
+            self.init_qso_vars()
+            self.update_waterfall()
+            self.update_pskr_uploader()
+            self.dial_freq_Hz = 14074000
+            self.pending_start_tx_stream = None
+            self.pending_ptt_on = None
+            self.call_hashes = {}
+            self._monitor_udp()
+            self.root.mainloop()
+
+    def _monitor_udp(self):
+        if not self.udp_q.empty():
+            self._handle_udp_message(self.udp_q.get())
+        if self.running:
+            self.root.after(100, self._monitor_udp)
+
+    def _start_components(self):
+        self.udp_comms = UdpComms(PORTS['rx_to_gui'], lambda msg_dict: self.udp_q.put(msg_dict))
+        rx = Receiver(rx_msg_port = PORTS['rx_to_gui'], input_keywords = self.settings.get('Sound in keywords'))
+        tx = Transmitter(tx_cmd_port = PORTS['gui_to_tx'], output_keywords = self.settings.get('Sound out keywords'))
+
+    def _shutdown(self):
+        if self.rig:
+            self.rig.ptt_off()
+            self.rig._shutdown()
+        if self.pskr_upload:
+            self.pskr_upload._shutdown()
+        if self.running:
+            self.running = False
+            self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.rx_cmd_port)
+            self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.tx_cmd_port)
+            self.udp_comms._shutdown()
+            time.sleep(0.5)
+        self.root.destroy()
+        sys.exit()
+
+    def _make_layout(self):        
         self.app_container = tk.Frame(self.root)
         self.app_container.pack(side = 'top')
         self.sidebar_container = tk.Frame(self.app_container)
@@ -283,7 +323,7 @@ class Gui:
 
         self.buttons = []
         bc = self.sidebar_container
-        self.buttons.append(tk.Button(bc, width = 10, text = 'Settings', command = self.show_settings))
+        self.buttons.append(tk.Button(bc, width = 10, text = 'Settings', command = self.settings.show))
         self.buttons.append(tk.Button(bc, width = 10, text = 'CQ', command = self.call_cq))
         self.buttons.append(tk.Button(bc, width = 10, text = 'STOP TX', command = self.stop_transmit))
         for btn in self.buttons:
@@ -309,45 +349,11 @@ class Gui:
         self.text_widget.bind('<Button-1>', self.row_click)
 
         self.scrollbar.config(command=self.text_widget.yview)
-        self.first_decode = False
-        
-        if self.running:
-            self.pskr_upload = PSKR_upload(self.settings.get('My call'), self.settings.get('My grid'), "PyFT8m")
-            self.adif_log = ADIF(f"{self.settings.get('config_folder')}/PyFT8m.adi")
-            self.rig = Rig(hamlib_port)
-            self.init_qso_vars()
-            self.text_widget.insert(tk.END, f"PyFT8m\n", 'info')
-            self.update_waterfall()
-            self.update_pskr_uploader()
-            self.dial_freq_Hz = 14074000
-            self.pending_start_tx_stream = None
-            self.pending_ptt_on = None
-            self.call_hashes = {}
-            self.root.mainloop()
 
-    def show_settings(self):
-        self.settings.show()
-
-    def shutdown(self):
-        if self.rig:
-            self.rig.ptt_off()
-            self.rig.shutdown()
-        if self.pskr_upload:
-            self.pskr_upload.shutdown()
-        if self.running:
-            self.running = False
-            self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.rx_cmd_port)
-            self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.tx_cmd_port)
-            self.udp_comms.shutdown()
-            time.sleep(0.5)
-        self.root.destroy()
-        sys.exit()
-
-    def _process_udp_msg(self, msg_dict):
+    def _handle_udp_message(self, msg_dict):
         display_text = ''
         if msg_dict['mtype'] == 'error':
-            print(msg_dict['info'])
-            self.shutdown()
+            self._shutdown()
         if msg_dict['mtype'] == 'decode':
             self.pskr_upload.add_report(self.dial_freq_Hz, msg_dict)
             their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], f"{float(msg_dict['fHz']):07.2f}", msg_dict['dt'], msg_dict['msg_tuple']
@@ -466,6 +472,5 @@ class Gui:
         print("Transmit cancelled")
 
 if __name__ == "__main__":
-    gui = Gui(tx_cmd_port = 2122, rx_msg_port = 2121, rx_cmd_port = 2123, pskr_uploader_msg_port = 2123,
-              hamlib_port = 4532, max_tx_cycletime_start = 3, Receiver = Receiver, Transmitter = Transmitter)
+    gui = Gui(Receiver = Receiver, Transmitter = Transmitter)
 
