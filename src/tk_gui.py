@@ -211,6 +211,7 @@ class Gui:
         self.running = True
         self.root = tk.Tk()
         self.root.protocol("WM_DELETE_WINDOW", lambda: self._shutdown_all())
+        self.root.title("PyFT8m by G1OJS")
         self._start_components()
 
         self.pskr_upload = None
@@ -345,23 +346,18 @@ class Gui:
         self.scrollbar.config(command=self.text_widget.yview)
 
     def _handle_udp_message(self, msg_dict):
-        display_text = ''
         if msg_dict['mtype'] == 'STATUS':
             self.component_status[msg_dict['from']] = msg_dict['value']
         if msg_dict['mtype'] == 'decode':
             self.pskr_upload.add_report(self.band_tuple, msg_dict)
             self.process_decode(msg_dict)
-        elif msg_dict['mtype'] == 'rollover':
-            display_type = 'info'
-            display_text = ''
         elif msg_dict['mtype'] == 'waterfall':
             self.waterfall_new_vals = [int(v) for v in msg_dict['data'].split(',')]
-            display_text = ''
 
     def process_decode(self, msg_dict):
         new_cycle = msg_dict['cyclestart_string'] != self.qso_dict['cyclestart_string']
         their_snr, dt, fHz, msg_tuple = msg_dict['their_snr'], msg_dict['dt'], msg_dict['fHz'], msg_dict['msg_tuple']
-        display_text = f"{their_snr} {dt} {fHz} ~ {' '.join(msg_tuple)}"
+        display_text = f" {their_snr}  {dt}  {fHz}  ~  {' '.join(msg_tuple)}"
         idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(self.qso_dict['call']) + 3 * (msg_tuple[1] == self.qso_dict['call'])
         display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
         tnow = time.time()
