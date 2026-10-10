@@ -39,7 +39,7 @@ class PSKR_upload:
     # https://pskreporter.info/cgi-bin/psk-analysis.pl
     def __init__(self, mycall, mygrid, software, pskr_addr = {'host':'report.pskreporter.info', 'port':4739}):
         self.pskr_addr = pskr_addr
-        self.udp_comms = UdpComms()
+        self.udp_comms_pskr = UdpComms(ports = {'listen':None, 'send':pskr_addr['port']}, remote_host = pskr_addr['host'])
         self.RxInfoRecDescriptor_CallLocSoft = b"\x00\x03\x00\x24\x99\x92\x00\x03\x00\x01\x80\x02\xFF\xFF\x00\x00\x76\x8F\x80\x04\xFF\xFF\x00\x00\x76\x8F\x80\x08\xFF\xFF\x00\x00\x76\x8F\x00\x00"
         self.SenderInfoRecDescriptor_SenderFreqSNRiMDModeSourceTime = b"\x00\x02\x00\x3C\x99\x93\x00\x07\x80\x01\xFF\xFF\x00\x00\x76\x8F\x80\x05\x00\x04\x00\x00\x76\x8F\x80\x06\x00\x01\x00\x00\x76\x8F\x80\x07\x00\x01\x00\x00\x76\x8F\x80\x0A\xFF\xFF\x00\x00\x76\x8F\x80\x0B\x00\x01\x00\x00\x76\x8F\x00\x96\x00\x04"
         self.last_descriptors_time = 0
@@ -53,8 +53,8 @@ class PSKR_upload:
         self.lock = threading.Lock()
         print(f"[PSKR_upload] Spots will upload to pskreporter if Rx band is known")
 
-    def _shutdown(self):
-        self.udp_comms._shutdown()
+    def shutdown(self):
+        self.udp_comms_pskr.shutdown()
 
     def add_report(self, dial_freq_Hz, msg_dict):
         if msg_dict['mtype'] == 'decode':
@@ -102,8 +102,7 @@ class PSKR_upload:
         packet = bytearray(header + self.rx_block + self._block(b"\x99\x93", senders))
         struct.pack_into("!H", packet, 2, len(packet))
         self.seq += len(self.reports)
-        self.udp_comms.udp_send_bytes(packet, dest_host = self.pskr_addr['host'], dest_port = self.pskr_addr['port'])
-        self.udp_q = queue.Queue
+        self.udp_comms_pskr.udp_send_bytes(packet)
         self.reports = {}
         self.last_report_time = time.time()
         print(f"[pskr_upload] Reports sent")
@@ -178,7 +177,7 @@ class Rig:
             cmd = f"{rigctld} -m {rig_code} -r {com_rig} -s {com_baud}"
             threading.Thread(target = subprocess.run, args = (cmd,)).start()   
 
-    def _shutdown(self):
+    def shutdown(self):
         self.sock_hamlib.close()
         print("Rig control is shut down")
 
@@ -246,17 +245,18 @@ class Settings:
                 if k in self.cfg:
                     self.cfg[k].set(cfg_dict[k])
 
-PORTS = {'gui_to_rx': 2122, 'rx_to_gui':2121, 'gui_to_tx': 2124, 'tx_to_gui': 2123}
-
+PORTS = {'gui_to_rx': 2121, 'rx_to_gui':2122, 'gui_to_tx': 2123, 'tx_to_gui': 2124}
+MAX_CYCLETIME_TX_START = 3
 class Gui:
     def __init__(self, Receiver = None, Transmitter = None):
         self.rig = None
         self.running = True
         self.pskr_upload = None
         self.root = None
+        self.component_status = {}
         self.udp_q = queue.Queue()
         self.root = tk.Tk()
-        self.root.protocol("WM_DELETE_WINDOW", lambda: self._shutdown())
+        self.root.protocol("WM_DELETE_WINDOW", lambda: self._shutdown_all())
         
         self.settings = Settings()
         if not self.settings.allOK():
@@ -277,7 +277,6 @@ class Gui:
             self.pending_start_tx_stream = None
             self.pending_ptt_on = None
             self.call_hashes = {}
-            self._monitor_udp()
             self.root.mainloop()
 
     def _monitor_udp(self):
@@ -287,21 +286,31 @@ class Gui:
             self.root.after(100, self._monitor_udp)
 
     def _start_components(self):
-        self.udp_comms = UdpComms(PORTS['rx_to_gui'], lambda msg_dict: self.udp_q.put(msg_dict))
-        rx = Receiver(rx_msg_port = PORTS['rx_to_gui'], input_keywords = self.settings.get('Sound in keywords'))
-        tx = Transmitter(tx_cmd_port = PORTS['gui_to_tx'], output_keywords = self.settings.get('Sound out keywords'))
+        self.udp_comms_rcvr = UdpComms(ports = {'listen':PORTS['rx_to_gui'], 'send':PORTS['gui_to_rx']}, rx_callback = lambda msg_dict: self.udp_q.put(msg_dict))
+        self.udp_comms_txr = UdpComms(ports = {'listen':PORTS['tx_to_gui'], 'send':PORTS['gui_to_tx']}, rx_callback = lambda msg_dict: self.udp_q.put(msg_dict))
+        self._monitor_udp()
+        rx = Receiver(ports = {'listen':PORTS['gui_to_rx'], 'send':PORTS['rx_to_gui']}, input_keywords = self.settings.get('Sound in keywords'))
+        tx = Transmitter(ports = {'listen':PORTS['gui_to_tx'], 'send':PORTS['tx_to_gui']}, output_keywords = self.settings.get('Sound out keywords'))
+        self.root.after(2000, self._check_components)
 
-    def _shutdown(self):
+    def _check_components(self):
+        if not all([comp in self.component_status for comp in ['receiver','transmitter']]):
+            self._shutdown_all()
+        if not all([self.component_status[comp] == 'OK' for comp in self.component_status]):
+            self._shutdown_all()
+            
+    def _shutdown_all(self):
         if self.rig:
             self.rig.ptt_off()
-            self.rig._shutdown()
+            self.rig.shutdown()
         if self.pskr_upload:
-            self.pskr_upload._shutdown()
+            self.pskr_upload.shutdown()
         if self.running:
             self.running = False
-            self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.rx_cmd_port)
-            self.udp_comms.udp_send_dict({'mtype':'shutdown'}, dest_port = self.tx_cmd_port)
-            self.udp_comms._shutdown()
+            self.udp_comms_rcvr.udp_send_dict({'mtype':'shutdown'})
+            self.udp_comms_txr.udp_send_dict({'mtype':'shutdown'})
+            self.udp_comms_rcvr.shutdown()
+            self.udp_comms_txr.shutdown()
             time.sleep(0.5)
         self.root.destroy()
         sys.exit()
@@ -352,8 +361,8 @@ class Gui:
 
     def _handle_udp_message(self, msg_dict):
         display_text = ''
-        if msg_dict['mtype'] == 'error':
-            self._shutdown()
+        if msg_dict['mtype'] == 'STATUS':
+            self.component_status[msg_dict['from']] = msg_dict['value']
         if msg_dict['mtype'] == 'decode':
             self.pskr_upload.add_report(self.dial_freq_Hz, msg_dict)
             their_snr, fHz, dt, msg_tuple = msg_dict['their_snr'], f"{float(msg_dict['fHz']):07.2f}", msg_dict['dt'], msg_dict['msg_tuple']
@@ -444,20 +453,19 @@ class Gui:
     def queue_transmit(self, message):
         T_CYC, TX_T0 = 15, 0.5
         def generate_tx_audio(tx_message):
-            self.udp_comms.udp_send_dict({'mtype':'generate_tx_audio', 'message':tx_message}, dest_port = self.tx_cmd_port)
+            self.udp_comms_txr.udp_send_dict({'mtype':'generate_tx_audio', 'message':tx_message})
         def start_tx_audio():
-            self.udp_comms.udp_send_dict({'mtype':'send_tx_audio'}, dest_port = self.tx_cmd_port)        
+            self.udp_comms_txr.udp_send_dict({'mtype':'send_tx_audio'})        
         if message:
             generate_tx_audio(message)
-            mtx = self.max_tx_cycletime_start
             ct = (time.time() - TX_T0) % T_CYC
-            delay =  0 if ct < mtx else T_CYC - ct
+            delay =  0 if ct < MAX_CYCLETIME_TX_START else T_CYC - ct
             self.pending_start_tx_stream = self.root.after(int(delay * 1000), start_tx_audio)
             self.pending_ptt_on = self.root.after(int(delay * 1000), self.rig.ptt_on)
             self.root.after(int(delay * 1000 + 13000), self.rig.ptt_off)
 
     def stop_transmit(self):
-        self.udp_comms.udp_send_dict({'mtype':'stop_tx_audio'}, dest_port = self.tx_cmd_port)      
+        self.udp_comms_txr.udp_send_dict({'mtype':'stop_tx_audio'})      
         self.rig.ptt_off()
         if self.pending_ptt_on:
             try:

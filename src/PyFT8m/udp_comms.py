@@ -1,50 +1,50 @@
 import threading, socket, json, time
 
 class UdpComms:
-    def __init__(self, listen_on_port = None, rx_callback = None):
+    def __init__(self, ports = {'listen':None,'send':None}, rx_callback = None, remote_host = 'localhost'):
         self.running = True
-        self.listen_on_port = listen_on_port
+        self.ports = ports
+        self.remote_host = remote_host
         self.rx_callback = rx_callback
-        self.sock_in = None
-        self.sock_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock_listen = None
+        self.sock_send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.thread = None
-        if listen_on_port:
-            self.sock_in = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.sock_in.settimeout(0.1)
-            self.sock_in.bind(('', self.listen_on_port))
+        if self.ports['listen']:
+            self.sock_listen = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.sock_listen.settimeout(0.1)
+            self.sock_listen.bind(('', self.ports['listen']))
             self.thread = threading.Thread(target = self.listen, daemon = True).start()
 
-    def shutdown(self):
-        self.running = False
-        self.sock_out.close()
-        print("UDP comms sending socket is closed\n")
-        if self.listen_on_port:
-            self.sock_in.close()
-            print(f"UDP comms listener is shut down for port {self.listen_on_port}\n")
-        if self.thread and self.thread is not threading.current_thread():
-            self.thread.join(timeout=0.5)
-        
-    def udp_send_dict(self, msg_dict, dest_host = 'localhost', dest_port = 0):
-        self.udp_send_bytes(json.dumps(msg_dict).encode('utf-8'), dest_host = dest_host, dest_port = dest_port)
-
-    def udp_send_bytes(self, msg_bytes, dest_host = 'localhost', dest_port = 0):
-        if self.running:
-            self.sock_out.sendto(msg_bytes, (dest_host, dest_port))
-          #  print(f"[UDP] sent {f'{msg_dict}'[:25]} to {dest_port}")
-
+# listener ==============================
     def listen(self):
         while self.running:
             rx_bytes = None
             try:
-                rx_bytes, _ = self.sock_in.recvfrom(1024)
+                rx_bytes, _ = self.sock_listen.recvfrom(1024)
             except:
                 pass
             if rx_bytes:
                 msg_dict = json.loads(rx_bytes.decode('utf-8'))
-               # print(f"[UDP] listen_on_port {self.listen_on_port} received message {f'{msg_dict}'[:25]}")
                 self.rx_callback(msg_dict)
                 if msg_dict['mtype'] == 'shutdown':
                     self.shutdown()
+                    
+    def shutdown(self):
+        self.running = False
+        self.sock_send.close()
+        print("UDP comms sending socket is closed\n")
+        if self.ports['listen']:
+            self.sock_listen.close()
+            print(f"UDP comms listener is shut down for port {self.ports['listen']}\n")
+        if self.thread and self.thread is not threading.current_thread():
+            self.thread.join(timeout=0.5)
+        
+# senders ==============================
+    def udp_send_dict(self, msg_dict):
+        self.udp_send_bytes(json.dumps(msg_dict).encode('utf-8'))
 
+    def udp_send_bytes(self, msg_bytes):
+        if self.running:
+            self.sock_send.sendto(msg_bytes, (self.remote_host, self.ports['send']))
 
 

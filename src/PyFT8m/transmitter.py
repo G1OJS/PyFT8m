@@ -205,7 +205,7 @@ def append_crc(bits77_int):
     return bits91_int, bits14_int
 
 class Transmitter:
-    def __init__(self, tx_cmd_port, output_keywords = None):
+    def __init__(self, ports = None, output_keywords = None):
         self.tx_freq = 777
         self.output_keywords = output_keywords
 
@@ -215,6 +215,7 @@ class Transmitter:
         self.tx_enabled = False
         self.tx_message = None
         self.stream = None
+        self.running = True
 
         for dev_idx in range(self.pya.get_device_count()):
             name = self.pya.get_device_info_by_index(dev_idx)['name']
@@ -225,13 +226,14 @@ class Transmitter:
                 self.output_device_index = dev_idx
                 break
             
-        udp_comms = UdpComms(tx_cmd_port, self.udp_received)
-        if not self.output_device_index:
-            info = f"[Transmitter] No output audio device found matching {output_keywords}"
-            udp_comms.udp_send_dict({'mtype':'error', 'info':info}, dest_port = 2121)
-        else:
-            self.running = True
+        udp_comms = UdpComms(ports, self.udp_received)
+        if self.output_device_index:
+            udp_comms.udp_send_dict({'mtype':'STATUS', 'from':'transmitter', 'value':'OK'})
             threading.Thread(target = self.transmit_daemon, daemon = True).start()
+        else:
+            info = f"[Transmitter] No output audio device found matching {output_keywords}"
+            udp_comms.udp_send_dict({'mtype':'info', 'info':info})
+            self.running = False
         
     def udp_received(self, msg_dict):
         if msg_dict['mtype'] == 'shutdown':

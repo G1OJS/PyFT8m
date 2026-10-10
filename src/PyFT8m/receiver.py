@@ -355,11 +355,10 @@ class AudioIn:
 
 class Receiver:
     def __init__(self, max_freq = 2900, output_type = 'udp', latest_decode = 2,
-                 rx_msg_port = 2121, rx_cmd_port = 2123, input_keywords = None):
+                 ports = None, input_keywords = None):
         self.latest_decode = latest_decode
         self.input_keywords = input_keywords
         self.max_freq = max_freq
-        self.rx_msg_port = rx_msg_port
         self.output_type = output_type
         self.candidates = []
         self.duplicate_filter = []
@@ -373,23 +372,25 @@ class Receiver:
             csync[sym_idx, tone * BPT] =  1
         self.csync_flat =  csync.ravel()
         self.waterfall_max = 0
-        self.running = True 
-        self.udp_comms = UdpComms(rx_cmd_port, self.udp_received)
+        self.running = True
+        if self.output_type == 'udp':   
+            self.udp_comms = UdpComms(ports = ports, rx_callback = self.udp_received)
         self.audio_in = AudioIn(input_keywords, self.max_freq)
         threading.Thread(target = self.manage_cycle, daemon=True ).start()
         threading.Thread(target = self.send_waterfall_rows, daemon=True ).start()
         if self.audio_in.indev:
             self.send_output({'mtype':'info', 'info':'Receiver starting'})
+            self.send_output({'mtype':'STATUS', 'from':'receiver', 'value':'OK'})
         else:
             info = f"[Receiver] Couldn't find input device matching '{self.input_keywords}'"
-            self.send_output({'mtype':'error', 'info':info})
+            self.send_output({'mtype':'info', 'info':info})
             self.running = False
 
     def send_output(self, msg_dict, noprint = False):
         if self.output_type == 'print' and not noprint:
             print(msg_dict)
             return
-        self.udp_comms.udp_send_dict(msg_dict, dest_port = self.rx_msg_port)
+        self.udp_comms.udp_send_dict(msg_dict)
 
     def udp_received(self, msg_dict):
         if msg_dict['mtype'] == 'shutdown':
