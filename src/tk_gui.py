@@ -120,7 +120,7 @@ class ADIF:
         qd = qso_dict
         if band_tuple is not None:
             band, fHz_dial = band_tuple
-            log_dict = {'operator':qd['my_call'], 'station_callsign':qd['my_call'], 'my_gridsquare':qd['my_grid'], 'mode':'FT8',
+            log_dict = {'operator':qd['call'], 'station_callsign':qd['call'], 'my_gridsquare':qd['grid'], 'mode':'FT8',
                         'time_on': time.strftime("%H%M%S", gmt), 'qso_date':time.strftime("%Y%m%d", gmt),
                         'band':band, 'freq':int((fHz_dial + int(qd['fHz']))/1e6),
                         'call':qd['their_call'], 'gridsquare': qd['their_grid'], 'rst_sent':qd['their_snr'], 'rst_rcvd':qd['my_snr']}
