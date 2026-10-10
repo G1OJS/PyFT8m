@@ -179,6 +179,10 @@ class Rig:
 
     def ptt_off(self):
         self._send_tcp(f"T 0")
+
+    def set_band(self, band_tuple):
+        band, fHz = band_tuple
+        self._send_tcp(f"F {fHz}")
         
 
 class Settings:
@@ -291,10 +295,18 @@ class Gui:
         bc = self.sidebar_container
         #self.buttons.append(tk.Button(bc, width = 10, text = 'Settings', command = self.settings.show))
         self.buttons.append(tk.Button(bc, width = 10, text = 'CQ', command = self.call_cq))
+        self.buttons.append(tk.Button(bc, width = 10, text = 'Repeat last', command = self.queue_transmit))
         self.buttons.append(tk.Button(bc, width = 10, text = 'STOP TX', command = self.stop_transmit))
         for btn in self.buttons:
             btn.pack(side = 'top', anchor = 'n')
-        
+
+        for band in self.config['bands']:
+            fHz = 1000000 * float(self.config['bands'][band])
+            band_tuple = (band, fHz)
+            btn = tk.Button(bc, width = 10, text = band, command = lambda band_tuple = band_tuple: self.set_band(band_tuple))
+            btn.pack(side = 'top', anchor = 'n')
+            self.buttons.append(btn)
+            
         self.waterfall_canvas = tk.Canvas(self.waterfall_container, height = 100, bg = '#909090')
         self.waterfall_canvas.pack(side = 'top', fill = 'both')
         self.waterfall_line = self.waterfall_canvas.create_line(0,0,600,0, fill = 'green', width = 2)
@@ -352,6 +364,10 @@ class Gui:
             self.text_widget.insert(tk.END, f"{display_text}\n", display_type)
             self.text_widget.see('end')
 
+    def set_band(self, band_tuple):
+        self.band_tuple = band_tuple
+        self.rig.set_band(band_tuple)
+
     def update_pskr_uploader(self):
         if self.pskr_upload and self.running:
             self.pskr_upload.send_reports()
@@ -407,7 +423,7 @@ class Gui:
         if self.my_call and self.my_grid:
             self.queue_transmit(f"CQ {self.my_call} {self.my_grid}")
 
-    def queue_transmit(self, message):
+    def queue_transmit(self, message = None):
         T_CYC, TX_T0 = 15, 0.5
         def generate_tx_audio(tx_message):
             self.udp_comms_txr.udp_send_dict({'mtype':'generate_tx_audio', 'message':tx_message})
@@ -415,11 +431,11 @@ class Gui:
             self.udp_comms_txr.udp_send_dict({'mtype':'send_tx_audio'})        
         if message:
             generate_tx_audio(message)
-            ct = (time.time() - TX_T0) % T_CYC
-            delay =  0 if ct < MAX_CYCLETIME_TX_START else T_CYC - ct
-            self.pending_start_tx_stream = self.root.after(int(delay * 1000), start_tx_audio)
-            self.pending_ptt_on = self.root.after(int(delay * 1000), self.rig.ptt_on)
-            self.root.after(int(delay * 1000 + 13000), self.rig.ptt_off)
+        ct = (time.time() - TX_T0) % T_CYC
+        delay =  0 if ct < MAX_CYCLETIME_TX_START else T_CYC - ct
+        self.pending_start_tx_stream = self.root.after(int(delay * 1000), start_tx_audio)
+        self.pending_ptt_on = self.root.after(int(delay * 1000), self.rig.ptt_on)
+        self.root.after(int(delay * 1000 + 13000), self.rig.ptt_off)
 
     def stop_transmit(self):
         self.udp_comms_txr.udp_send_dict({'mtype':'stop_tx_audio'})      
