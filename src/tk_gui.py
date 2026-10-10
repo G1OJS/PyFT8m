@@ -326,7 +326,7 @@ class Gui:
             
         self.waterfall_canvas = tk.Canvas(self.waterfall_container, height = 100, bg = '#909090')
         self.waterfall_canvas.pack(side = 'top', fill = 'both')
-        self.waterfall_line = self.waterfall_canvas.create_line(0,0,600,0, fill = 'green', width = 2)
+        self.waterfall_line = self.waterfall_canvas.create_line(0,0,600,0, fill = '#40E040', width = 2)
         self.waterfall_vals = None
         self.waterfall_new_vals = None
         
@@ -335,12 +335,12 @@ class Gui:
         self.text_widget = tk.Text(self.decodes_container, wrap=tk.WORD, yscrollcommand=self.scrollbar.set)
         self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        fontsize = 10
-        self.text_widget.tag_config('norm', foreground = 'white', background = 'blue', font=('Helvetica', fontsize, 'bold'))
-        self.text_widget.tag_config('info', foreground = 'black', background = 'white', font=('Helvetica', fontsize, 'bold'))
-        self.text_widget.tag_config('cq', foreground = 'white', background = 'green', font=('Helvetica', fontsize, 'bold'))
-        self.text_widget.tag_config('to_me', foreground = 'white', background = 'red', font=('Helvetica', fontsize, 'bold'))        
-        self.text_widget.tag_config('from_me', foreground = 'black', background = 'yellow', font=('Helvetica', fontsize, 'bold'))
+        font=('calibri', 12, 'bold')
+        self.text_widget.tag_config('norm', foreground = 'white', background = 'blue', font = font )
+        self.text_widget.tag_config('info', foreground = 'black', background = 'white', font = font)
+        self.text_widget.tag_config('cq', foreground = 'white', background = 'green', font = font)
+        self.text_widget.tag_config('to_me', foreground = 'white', background = 'red', font = font)        
+        self.text_widget.tag_config('from_me', foreground = 'black', background = 'yellow', font = font)
         self.text_widget.bind('<Button-1>', self.row_click)
 
         self.scrollbar.config(command=self.text_widget.yview)
@@ -357,7 +357,7 @@ class Gui:
     def process_decode(self, msg_dict):
         new_cycle = msg_dict['cyclestart_string'] != self.qso_dict['cyclestart_string']
         their_snr, dt, fHz, msg_tuple = msg_dict['their_snr'], msg_dict['dt'], msg_dict['fHz'], msg_dict['msg_tuple']
-        display_text = f" {their_snr}  {dt}  {fHz}  ~  {' '.join(msg_tuple)}"
+        display_text = f" {their_snr}  {dt}  {float(fHz):07.2f}  ~  {' '.join(msg_tuple)}"
         idx = 1 * msg_tuple[0].startswith("CQ") + 2* msg_tuple[0].startswith(self.qso_dict['call']) + 3 * (msg_tuple[1] == self.qso_dict['call'])
         display_type = ['norm','cq','to_me','from_me', 'from_me'][idx]
         tnow = time.time()
@@ -374,7 +374,7 @@ class Gui:
         curr = e.widget.index("current").split('.')[0]
         row_txt = e.widget.get(f"{curr}.0", f"{curr}.end")
         if "~" in row_txt:
-            rx_msg = row_txt.split('~')[1][1:]
+            rx_msg = row_txt.split(' ~ ')[1][1:]
             msg_tuple = rx_msg.split(' ')
             self.qso_dict.update({'their_call':msg_tuple[1], 'their_snr': row_txt[:3]})
             self.progress_qso(msg_tuple)
