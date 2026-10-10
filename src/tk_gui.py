@@ -232,6 +232,7 @@ class Gui:
 
         self.settings = Settings()
         self._make_layout()
+        self.update_clock()
         self.update_waterfall()
         self.update_pskr_uploader()
         self.qso_dict = {'cyclestart_string': '', 'fHz':'0', 'dt':'0', 'decode_info':'', 'msg_tuple':('','',''),
@@ -302,6 +303,11 @@ class Gui:
         self.info_label = tk.Label(self.info_container, text = 'text', bg = '#707070')
         self.info_label.pack(side = 'top', fill = 'both')
 
+        self.clock_frame = tk.Frame(self.sidebar_container, width = 10)
+        self.clock_frame.pack(side = 'top')
+        self.clock_lbl = tk.Label(self.clock_frame, font=('calibri', 14, 'bold'), bg='purple', fg='white')
+        self.clock_lbl.pack(anchor='center')
+
         self.buttons = []
         bc = self.sidebar_container
         #self.buttons.append(tk.Button(bc, width = 10, text = 'Settings', command = self.settings.show))
@@ -309,12 +315,12 @@ class Gui:
         self.buttons.append(tk.Button(bc, width = 10, text = 'Repeat last', command = self.queue_transmit))
         self.buttons.append(tk.Button(bc, width = 10, text = 'STOP TX', command = self.stop_transmit))
         for btn in self.buttons:
-            btn.pack(side = 'top', anchor = 'n')
+            btn.pack(side = 'top', anchor = 'n', pady = 1)
 
         for band_tuple in self.band_tuples:
             band, _ = band_tuple
             btn = tk.Button(bc, width = 10, text = band, command = lambda band_tuple = band_tuple: self.set_band(band_tuple))
-            btn.pack(side = 'top', anchor = 'n')
+            btn.pack(side = 'top', anchor = 'n', pady = 1)
             self.buttons.append(btn)
             
         self.waterfall_canvas = tk.Canvas(self.waterfall_container, height = 100, bg = '#909090')
@@ -404,6 +410,10 @@ class Gui:
         self.band_tuple = band_tuple
         self.rig.set_band(band_tuple)
         self.text_widget.delete(1.0, tk.END)
+
+    def update_clock(self):
+        self.clock_lbl.config(text = time.strftime('%H:%M:%S'))
+        self.clock_lbl.after(1000, self.update_clock)
 
     def update_pskr_uploader(self):
         if self.pskr_upload and self.running:
